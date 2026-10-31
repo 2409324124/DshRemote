@@ -20,6 +20,8 @@ POC 与 MVP 的**代码、文档、测试、部署产物、本地端到端验收
   host-plugin 代理 WebSocket 升级（页面空/一直重连）；隧道 URL 端口识别（避免跳内嵌浏览器、
   恢复手机端布局）；`unknown_device` 明确重配对提示；多 challenge 并存；重连不清设备表。
 - **部署**：见 `server/README.md` §10（relay 镜像 + nginx SNI 前置 / 直连两种形态）。
+- **问题记录**：本次落地遇到的部署/鉴权/WebSocket/连接复用等问题与根因整理在
+  [`docs/diagnostics/12-group-service-issues.md`](docs/diagnostics/12-group-service-issues.md)。
 
 ## 2026-10-27 修复：应用内通知卡片停留时间 5s → 20s
 

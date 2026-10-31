@@ -12,6 +12,9 @@
 主机只做出站隧道；**设备身份 = 配对注册的设备密钥 + 短时 token**（取消客户端证书）；
 主机 ID 由服务端分配管理；推送由服务端统一完成。`main` 的 B2 盲中继形态**保持不变**。
 
+> 落地过程中实际踩到的问题与根因（部署/鉴权/WebSocket/连接复用等）见
+> [`docs/diagnostics/12-group-service-issues.md`](diagnostics/12-group-service-issues.md)。
+
 ## 1. 目标与非目标
 
 ### 目标（v1）
