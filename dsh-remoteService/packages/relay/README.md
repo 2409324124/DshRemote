@@ -1,24 +1,36 @@
-# dsh-remote-relay —— 自托管**盲中继**（方案 B2）
+# dsh-remote-relay —— 群体服务版（A 模式）relay
 
-DSH 远程访问的服务端中继。三个角色共用一个域名后缀：
+DSH 远程访问的**群体服务版**服务端中继：服务提供方部署一个 relay 域名，受邀的群成员
+各自的主机凭邀请码自助接入，手机 App 通过 relay 访问自己的主机。
 
-| 端口 | 协议 | 作用 | 谁能连 |
-|---|---|---|---|
-| `443/tcp` | **TLS 透传（不终止）** | 读 ClientHello 的 SNI，把 `<hostId>.<domain>` 的 TCP 流转给对应主机的控制连接 | App / 手机 WebView |
-| `80/tcp` | HTTP | 除 `GET /healthz` 外一律 `301` 到 `https://<host><path>` | 浏览器 / 探针 |
-| `8443/tcp` | WSS（relay 自己终止 TLS） | 主机插件控制面：`host.hello` 鉴权、心跳、`host.open/opened/close`、二进制流帧 | 只有 host 插件 |
+> **0.3.0 起 relay 只服务群体版产品线**：classic 单机盲中继（443 TLS 透传 / 80 跳转 /
+> `tokens.json` / Expo 推送）已全部删除。旧版本行为见 git 历史，本文不再描述。
 
-**盲中继**：443 上是原始 TCP 字节流，relay 不参与 TLS 握手、**看不到明文、也不持有任何主机子域证书私钥**。
-主机子域 `<hostId>.<domain>` 的服务端证书由主机插件自己申请（B2：主机侧 DNS-01，见下），relay 只在
-SNI 上做路由。relay 自己唯一的证书是控制面用的 `relay.example.com` 证书。
+relay 提供五个面（职责分离，可各自独立监听）：
+
+| 面 | 配置 | 默认端口 | 作用 | 谁能连 |
+|---|---|---|---|---|
+| **边缘 TLS**（默认开启） | `group.edge.port` | 443 | relay 用通配证书终止手机 TLS，SNI → `<hostId>.<domain>`；设备会话鉴权后经隧道转发到主机 | 手机 App / WebView |
+| **控制面 WSS** | `controlPort` | 8443 | 主机插件出站隧道：`host.hello` 鉴权、心跳、`host.open`、二进制 `DATA`/`CLOSE` 帧 | 只有 host 插件 |
+| **注册 API** | `group.apiPort` | 9443 | `POST /__group/register`、`POST /__group/refresh`（邀请码 → 主机自助开通） | host 插件 |
+| **部署方后台** | `group.adminPort` + `group.adminBind` | 9444（默认绑 127.0.0.1） | `/__admin` 页面 + JSON API：邀请码/主机管理 | 只有部署方 |
+| **health** | `httpPort` | 80 | 只服务 `GET/HEAD /healthz`（容器 HEALTHCHECK / 同机探针） | 探针（建议只绑回环） |
 
 ```
-App ──TLS(SNI=h_abc.relay.example.com)──▶ relay:443 ──原始字节▲▼──▶ host 插件 TLS 监听 ──▶ DSH webServer
-                                                     │
-                                      多路复用二进制帧（DATA/CLOSE）
-                                                     ▼
-host 插件 ──WSS(relay.example.com:8443/control)──▶ relay:8443
+App ──TLS(SNI=h_abc.relay.example.com)──▶ relay:443（relay 终止 TLS，_Host- cookie 鉴权）
+                                            │
+                                   控制面隧道：JSON 控制消息 + DATA/CLOSE 帧
+                                            ▼
+host 插件 ──WSS(wss://relay.example.com:8443/control)──▶ relay:8443
+                                            │
+                                       浏览器/App 明文字节
+                                            ▼
+host 插件 loopback 明文代理 ──逐请求鉴权/deny list──▶ DSH webServer(127.0.0.1)
 ```
+
+**A 模式的安全边界**：relay **终止**手机 TLS（用部署方的通配证书），因此**部署方可见会话明文**——
+这 是本产品线的明确取舍，风险与责任由部署方承担（部署文档与 App 内已明示）。主机侧仍保持
+`127.0.0.1` 回环、deny list 与逐请求鉴权；relay 不信任来源 IP / `X-Forwarded-*` / 自定义头作为身份。
 
 ---
 
@@ -30,28 +42,35 @@ host 插件 ──WSS(relay.example.com:8443/control)──▶ relay:8443
 cd dsh-remoteService
 npm install
 
-# 起 relay（dev 模式允许无 TLS 的 ws:// 控制面；绝不能用于公网）
+# 起 relay：dev 模式允许无 TLS 的 ws:// 控制面（绝不能用于公网）。
+# 群体版边缘 TLS 默认开启（手机数据面是核心功能），因此这里用 --no-group-edge 显式关闭，
+# 只本地联调「注册 API / 部署方后台 / 控制面」。
 node packages/relay/bin/relay.js --dev --domain relay.test \
-  --data-port 0 --control-port 0 --http-port 0
-# 日志会打印实际端口：data :xxxxx / control :xxxxx / http :xxxxx
+  --control-port 0 --http-port 0 --group-file ./group.json --no-group-edge
+# 日志会打印实际端口：control :xxxxx / http health :xxxxx
 ```
+
+本地要联调「边缘 TLS + 隧道」时，在 config 里给 `group.edge` 配一张自签通配证书（`enabled`
+默认开启，不写也行），并显式 `"allowUnauthenticated": true`（**仅 dev/test 可用**，非 dev
+配置会直接报错）；完整例子见 `test/group-tunnel.test.js`。
 
 ### 1.2 生产
 
 ```bash
-# 1) 配置 + 控制面证书（见 §3）
+# 1) 配置 + 证书（见 §3）
 sudo install -d -m 0750 /etc/dsh-relay/certs
 sudo cp relay.example.json /etc/dsh-relay/relay.json   # 修改 domain 与证书路径
-# 2) 签发第一台主机的 token（明文只打印一次）
-sudo node packages/relay/bin/relay.js token create h_ab12cd34 --config /etc/dsh-relay/relay.json
-# 3) 启动
+# 2) 起 relay（首次启动会在 group.json 同目录生成部署方 admin-token，0600）
 sudo node packages/relay/bin/relay.js --config /etc/dsh-relay/relay.json
-# 4) 健康检查
+# 3) 健康检查
 curl -s http://127.0.0.1/healthz
-# {"ok":true,"domain":"relay.example.com","hosts":["h_ab12cd34"]}
+# {"ok":true,"domain":"relay.example.com","hosts":[]}
+# 4) 发邀请码给群成员（明文只打印一次）
+sudo node packages/relay/bin/relay.js invite create --note "friend A" --expires-in 7d --config /etc/dsh-relay/relay.json
 ```
 
-> 生产必须提供 `tls.certFile/tls.keyFile`（或 `--dev` 才允许 ws://）；否则 `createRelay()` 直接抛错拒绝启动。
+> 生产必须提供控制面 TLS（`tls.certFile/tls.keyFile`）与边缘通配证书（`group.edge.tls`）；
+> 否则 `createRelay()` 直接抛错拒绝启动。dev 模式（`--dev`）才允许 ws://。
 
 ### 1.3 测试
 
@@ -61,9 +80,10 @@ node --test packages/relay/test          # 目录入口（test/index.js）
 # 或按文件：node --test packages/relay/test/*.test.js
 ```
 
-测试覆盖：真实 ClientHello 捕获与 SNI 解析（含 TCP 分片/多 record）、token 拒绝、未知/缺失 SNI 销毁、
-完整端到端 TLS 透传（假 host + 本地自签 TLS 服务 + `tls.connect` 客户端）、二进制 CLOSE 帧、
-多路并发流、host 掉线清理、80 跳转与 `/healthz`、token CLI/文件权限。
+测试覆盖：控制面鉴权/心跳/替换/生产 wss、health 面（只放行 `/healthz`）、边缘 TLS 终止与
+SNI 路由、`host.open`/`opened` + 二进制帧隧道、设备 challenge→token→cookie 鉴权（含篡改/过期/
+跨主机/撤销设备拒绝）、注册/刷新/限流/配额/邀请码、部署方后台鉴权与接口分层、entrypoint
+自动生成配置。classic 数据面/推送/token 文件的测试已随功能删除。
 
 ---
 
@@ -71,47 +91,78 @@ node --test packages/relay/test          # 目录入口（test/index.js）
 
 ### 2.1 配置文件
 
-JSON（见 `relay.example.json`）：
+JSON（完整示例见 `relay.example.json`）：
 
 ```json
 {
   "domain": "relay.example.com",
-  "dataPort": 443,
   "controlPort": 8443,
   "httpPort": 80,
-  "dataHost": "0.0.0.0",
+  "listenHost": "0.0.0.0",
   "tls": { "certFile": "/data/certs/relay.example.com/fullchain.pem",
            "keyFile": "/data/certs/relay.example.com/privkey.pem" },
-  "tokensFile": "/data/tokens.json",
-  "logLevel": "info"
+  "logLevel": "info",
+
+  "group": {
+    "file": "/data/group.json",
+    "mobilePort": 443,
+    "maxHosts": 200,
+    "apiPort": 9443,
+    "apiBind": "0.0.0.0",
+    "adminPort": 9444,
+    "adminBind": "127.0.0.1",
+    "publicControlPort": 8443,
+    "edge": {
+      "enabled": true,
+      "port": 443,
+      "tls": { "certFile": "/data/certs/wildcard/fullchain.pem",
+               "keyFile": "/data/certs/wildcard/privkey.pem" },
+      "allowUnauthenticated": false
+    },
+    "auth": { "signingKeyFile": "/data/signing-key.pem" },
+    "adminTokenFile": "/data/admin-token"
+  }
 }
 ```
 
-- 相对路径（`tls.*`、`tokensFile`）按 **config 文件所在目录**解析。
-- `dataPort/controlPort/httpPort = 0` 表示临时端口（测试用；实际端口从返回值/日志读取）。
-- 也可直接在代码里用 `createRelay(options)` / `startRelay(config)`（见 `index.js` 注释），
-  返回 `{ dataPort, controlPort, httpPort, domain, dev, close(), health(), onlineHostIds() }`。
+- 相对路径（`tls.*`、`group.file`、`group.edge.tls.*`、`group.auth.signingKeyFile`、
+  `group.adminTokenFile`）按 **config 文件所在目录**解析。
+- `controlPort/httpPort/group.edge.port/... = 0` 表示临时端口（测试用；实际端口从返回值/日志读取）。
+- **`group.edge` 默认开启**（群体版唯一数据面）：必须提供覆盖 `*.<domain>` 的通配证书
+  （`group.edge.tls`），否则 relay 拒绝启动；只有显式 `"group": { "edge": { "enabled": false } }`
+  才会关闭——关闭后只有控制面/注册 API/后台，会打 warn，仅用于特殊/测试场景。
+- **classic 字段已删除**：配置里出现 `dataPort` / `tokensFile` / `hostTokens` / `push` 会被
+  **忽略并打一条 warn 日志**；`mode` 只接受 `"group"`（写 `"classic"` 直接报错拒绝启动）。
+- 也可直接在代码里用 `createRelay(options)` / `startRelay(config)`（见 `index.js` 注释）。
 
 优先级：**内置默认值 < config 文件 < 环境变量 < 命令行参数**。
 
 ### 2.2 环境变量
 
-`RELAY_DOMAIN`、`RELAY_DEV`、`RELAY_DATA_PORT`、`RELAY_CONTROL_PORT`、`RELAY_HTTP_PORT`、
-`RELAY_DATA_HOST`、`RELAY_TOKENS_FILE`、`RELAY_TLS_CERT_FILE`、`RELAY_TLS_KEY_FILE`、`RELAY_LOG_LEVEL`。
+`RELAY_DOMAIN`、`RELAY_DEV`、`RELAY_CONTROL_PORT`、`RELAY_HTTP_PORT`、`RELAY_LISTEN_HOST`、
+`RELAY_GROUP_FILE`、`RELAY_GROUP_MOBILE_PORT`、`RELAY_GROUP_API_PORT/BIND`、
+`RELAY_GROUP_ADMIN_PORT/BIND`、`RELAY_GROUP_PUBLIC_CONTROL_PORT`、
+`RELAY_GROUP_EDGE_ENABLED/PORT/CERT_FILE/KEY_FILE`、`RELAY_GROUP_SIGNING_KEY_FILE`、
+`RELAY_ADMIN_TOKEN`、`RELAY_ADMIN_TOKEN_FILE`、`RELAY_TLS_CERT_FILE`、`RELAY_TLS_KEY_FILE`、
+`RELAY_LOG_LEVEL`。
 
 ### 2.3 CLI
 
 ```text
 node packages/relay/bin/relay.js [启动参数]
-node packages/relay/bin/relay.js token create <hostId>   # 签发/轮换，明文 token 只打印一次
-node packages/relay/bin/relay.js token list              # hostId + token 掩码 + 时间
-node packages/relay/bin/relay.js token revoke <hostId>   # 吊销（下次重连生效）
-node packages/relay/bin/relay.js --help
+node packages/relay/bin/relay.js invite create --note <text> --max-uses <n> --expires-in <dur>
+node packages/relay/bin/relay.js invite list
+node packages/relay/bin/relay.js invite revoke <inviteId|code>
+node packages/relay/bin/relay.js host list
+node packages/relay/bin/relay.js host revoke <hostId>
+node packages/relay/bin/relay.js admin-token [--json]
+node packages/relay/bin/relay.js --help / --version
 ```
 
-token 文件默认是 **config 同目录的 `tokens.json`**（无 `--config` 时是当前目录），原子写入、权限 `0600`。
-relay 在**每次 host 握手时重读** token 文件，因此 CLI 签发/吊销后**无需重启 relay**；已建立的控制连接不受影响。
-`--json` 可让 `token create/list/revoke` 输出机器可读 JSON。
+- `group.json` 默认是 **config 同目录的 `group.json`**（无 `--config` 时是当前目录）。
+- relay 在**每次注册/每个 host 握手时重读** group.json，CLI 发放邀请/撤销主机**无需重启**。
+- `--json` 可让 invite/host/admin-token 输出机器可读 JSON。
+- classic 的 `token create/list/revoke` 已在 0.3.0 删除（会提示改用 invite/host 命令）。
 
 ---
 
@@ -126,72 +177,69 @@ relay 在**每次 host 握手时重读** token 文件，因此 CLI 签发/吊销
 | `relay.example.com  A` | relay 公网 IP |
 | `*.relay.example.com A` | relay 公网 IP（**泛解析，必须**——主机子域 `<hostId>.<domain>` 靠它） |
 
-- `hostId` 是子域名的**第一段**（DNS label）：`h_ab12cd34.relay.example.com` → `hostId = h_ab12cd34`。
+- `hostId` 由服务端分配、是子域名第一段（DNS label）：`h_ab12cd34.relay.example.com` → `hostId = h_ab12cd34`。
 - 只有 A 记录、relay 不监听 IPv6 时，不要加 AAAA（否则部分客户端走 IPv6 连不上）。
 
-### 3.2 控制面证书（relay 自己用，`relay.example.com`）
+### 3.2 控制面证书（`relay.example.com`）
 
-控制面 WSS 需要一个受信任证书。**80 端口被 301 占用，不能走 HTTP-01**，用 **DNS-01**：
+控制面 WSS 需要一张受信任证书。**80 端口不再做 ACME HTTP-01 跳转（只留 /healthz）**，
+请用 **DNS-01** 签发：
 
 ```bash
 # acme.sh + Cloudflare DNS API 示例（cf token 只需 Zone.DNS Edit 权限）
 export CF_Token="<cloudflare-api-token>"
 acme.sh --issue --dns dns_cf -d relay.example.com --keylength ec-256
 acme.sh --install-cert -d relay.example.com \
-  --fullchain-file /etc/dsh-relay/certs/fullchain.pem \
-  --key-file       /etc/dsh-relay/certs/privkey.pem \
+  --fullchain-file /etc/dsh-relay/certs/relay.example.com/fullchain.pem \
+  --key-file       /etc/dsh-relay/certs/relay.example.com/privkey.pem \
   --reloadcmd      "systemctl reload-or-restart dsh-relay"
-
-# 也可以不用 acme.sh：把已有证书链/私钥放到 tls.certFile / tls.keyFile 指定的位置即可
 ```
 
-- 只需要 `relay.example.com` 这一张证书；**不需要**为主机子域在 relay 上申请证书。
-- 续期由 acme.sh cron 自动完成（默认每天检查）；`--reloadcmd` 让 relay 重新加载（或直接让 relay 重启）。
-- 证书/私钥权限建议 `0600`，不要放进镜像。
+### 3.3 边缘通配证书（`*.relay.example.com`）
 
-### 3.3 主机子域证书（`<hostId>.relay.example.com`）
-
-由**主机插件**（B2，主机侧 DNS-01）自行申请和续期，host 插件拿到 DNS API 凭据后：
-1. 在控制面 `host.hello` 注册（relay 返回 `hostname`/`dataPort`）；
-2. 用自己的 DNS-01 拿到 `<hostId>.<domain>` 证书；
-3. 在 `127.0.0.1:<随机端口>` 起 TLS 监听（mTLS/反代在插件内部处理）。
-
-relay 只做 SNI 透传，**从不接触这些证书或私钥**，因此即使 relay 被攻破也无法冒充主机服务器 / 解密流量。
+A 模式下 relay 要**终止所有主机子域的手机 TLS**，因此需要一张覆盖 `*.<domain>` 的通配证书
+（同样用 DNS-01，放在 `group.edge.tls` 指向的路径）。私钥只在 relay 上。
 
 ---
 
 ## 4. Docker 部署
 
-`packages/relay/Dockerfile` 是多阶段、`node:24-alpine`、非 root；构建上下文必须是 `dsh-remoteService` 根目录
-（relay 依赖 workspace 包 `dsh-remote-protocol`）。`docker-compose.yml` 已按此设置（`context: ../..`）。
+`packages/relay/Dockerfile` 是多阶段、`node:24-alpine`、非 root；构建上下文必须是
+`dsh-remoteService` 根目录（relay 依赖 workspace 包 `dsh-remote-protocol`）。单机示例见
+`packages/relay/docker-compose.yml`；多面端口/nginx 前置的完整部署模板见
+[`server/docker-compose.group.yml`](../../../server/docker-compose.group.yml)
+与 [`server/README.md`](../../../server/README.md)。
 
 宿主机目录（`./data` 挂到容器 `/data`）：
 
 ```
 data/
-├── config/relay.json
-├── certs/relay.example.com/{fullchain.pem,privkey.pem}
-└── tokens.json            # 首次 token create 后出现（0600）
+├── config/relay.json                         # 首次启动按 .env 自动生成（0600，已存在不覆盖）
+├── certs/relay.example.com/{fullchain.pem,privkey.pem}   # 控制面证书
+├── certs/wildcard/{fullchain.pem,privkey.pem}            # 边缘通配证书
+├── group.json                                # 邀请码/主机注册表（0600，首次注册自动创建）
+├── signing-key.pem                           # 设备会话签名私钥（0600，首次启动自动生成）
+└── admin-token                               # 部署方后台 token（0600，首次启动自动生成）
 ```
 
 ```bash
 cd dsh-remoteService/packages/relay
-mkdir -p data/config data/certs/relay.example.com
-cp relay.example.json data/config/relay.json
+mkdir -p data/{config,certs/relay.example.com,certs/wildcard}
+cp relay.example.json data/config/relay.json   # 或删掉让 entrypoint 按 .env 生成
 cp /path/to/fullchain.pem data/certs/relay.example.com/
 cp /path/to/privkey.pem   data/certs/relay.example.com/
-# 容器内 relay 用户 uid/gid 通常是 1000；确保挂载目录可读
+cp /path/to/wildcard-fullchain.pem data/certs/wildcard/fullchain.pem
+cp /path/to/wildcard-privkey.pem   data/certs/wildcard/privkey.pem
 chown -R 1000:1000 data
 
-docker compose up -d --build
+RELAY_DOMAIN=relay.example.com docker compose up -d --build
 docker compose logs -f relay
-docker compose exec relay node packages/relay/bin/relay.js token create h_ab12cd34 --config /data/config/relay.json
+docker compose exec relay node packages/relay/bin/relay.js invite create --config /data/config/relay.json
 ```
 
-- 端口 `80/443/8443` 映射到宿主机；容器内非 root 绑定低端口依赖 Docker 的
-  `net.ipv4.ip_unprivileged_port_start=0`（Docker 默认即为 0，compose 里也显式声明）。
+- 镜像 tag：`dsh-remote-relay:0.3.0-group`。
 - `restart: unless-stopped` + 内置 `HEALTHCHECK`（`GET /healthz`）+ 日志轮转（10m × 3）。
-- 升级：`docker compose build && docker compose up -d`；token 与证书在 `./data` 卷里，不受影响。
+- 升级：`docker compose build && docker compose up -d`；证书与 group.json 在 `./data` 卷里，不受影响。
 
 ---
 
@@ -200,7 +248,7 @@ docker compose exec relay node packages/relay/bin/relay.js token create h_ab12cd
 ```ini
 # /etc/systemd/system/dsh-relay.service
 [Unit]
-Description=DSH remote access blind relay
+Description=DSH group-service relay
 After=network-online.target
 Wants=network-online.target
 
@@ -225,175 +273,29 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 ```
 
-```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now dsh-relay
-sudo systemctl status dsh-relay
-```
-
 ---
 
-## 6. 健康检查
+## 6. 群体版功能面
 
-```bash
-curl -s http://127.0.0.1/healthz    # 200
-# {"ok":true,"domain":"relay.example.com","hosts":["h_ab12cd34"]}
-curl -sI http://relay.example.com/  # 301 Location: https://relay.example.com/
-```
+### 6.1 注册 API（邀请码 → 主机自助开通）
 
-- `hosts` 是当前在线（控制面已鉴权且心跳正常）的 hostId 列表；主机离线时为空数组。
-- 仅 `GET/HEAD /healthz` 返回 200；其余路径/方法一律 301。
-- 外部探针建议直接 `curl -fsS https://relay.example.com:8443/healthz` 会 404（控制面只收 WS），
-  所以探针请打 **80 端口的 `/healthz`**（= curl `http://127.0.0.1/healthz`），或由容器 HEALTHCHECK 负责。
-
----
-
-## 6.1 推送（可选，旧版通道）
-
-> **默认不参与推送**：主机插件默认 `pushProvider=apns`，直接用自己的 APNs Auth Key 把
-> 会话摘要发到 Apple，不把 token 注册到 relay（见 host-plugin README「推送」）。本节是旧版
-> relay → Expo Push 通道，只有显式配置 `pushProvider: "expo"` 时才会用到。
-
-relay 接收 host 控制面的两类 push 消息（均需已通过 host.hello 鉴权）：
-
-```text
-host → relay: {t:'push.register', deviceId, provider:'expo', token}
-host → relay: {t:'push.send', kind:'attention'}
-relay → host: {t:'push.result', action:'register'|'send', ok, delivered, failed}
-```
-
-- token 只存内存、按 hostId 隔离（每主机最多 20 台）；relay 重启后由 App 下次打开重新注册。
-- 发送内容**固定为通用标题/正文 + `{kind}`**，绝不含会话名/消息/文件路径。
-- 配置：`relay.json` 的 `push: {enabled,endpoint,accessToken,title,body}` 或环境变量 `RELAY_PUSH_*`；默认 endpoint 为 Expo Push API。
-- 此旧通道 provider 仅支持 `expo`；`/healthz` 的 `pushTokens` 字段为当前注册设备数（默认直连 APNs 模式下为 0）。
-
----
-
-## 6.2 连接限制（DoS 兜底）
-
-`relay.json` 可选：
-
-```json
-{ "limits": { "maxConnectionsPerIp": 64, "maxDataConnections": 1024 } }
-```
-
-- `maxConnectionsPerIp`：同一来源 IP 允许的并发 443 数据连接数（默认 64）；
-- `maxDataConnections`：全站并发数据连接上限（默认 1024）。
-- 超限连接会被立即销毁并记 warn 日志；这是 DoS 兜底，不替代 host 侧 mTLS/配对鉴权。
-- `limits` 字段也接受 `RELAY_...` 之外的 JSON 配置（CLI 暂未映射环境变量）。
-
----
-
-## 7. 日志与隐私
-
-- 会记录：hostId、来源 IP:port、streamId、字节数（debug）、错误码、在线/离线、心跳超时、token 校验失败（不含 token 值）。
-- **不会记录**：TLS 内容、HTTP 正文、token 明文、主机子域证书、会话/文件信息。443 是原始字节透传，relay 看不到明文。
-- 默认 `logLevel: info`；排查时可用 `--log-level debug`（会打印每条 stream 的开闭，仍不含内容）。
-- **dev 模式是明文控制面**（host token 在网络上裸奔），只能在本机/隔离测试网使用；公网必须 TLS。
-
-## 8. token 生命周期 / 轮换
-
-```bash
-# 新主机
-node bin/relay.js token create h_new --config /etc/dsh-relay/relay.json   # 输出一次明文 token
-# 轮换某主机（旧 token 立即失效；已连接会话不受影响，下次重连用新 token）
-node bin/relay.js token create h_old --config /etc/dsh-relay/relay.json
-# 吊销
-node bin/relay.js token revoke h_old --config /etc/dsh-relay/relay.json
-# 查看（掩码）
-node bin/relay.js token list --config /etc/dsh-relay/relay.json
-```
-
-- `tokens.json` 为纯 JSON、权限 `0600`、原子写入；备份它 = 备份所有 host 凭据，注意保管。
-- relay 每次握手重读文件，所以签发/轮换/吊销**无需重启**；已在线连接在重连或心跳超时后才会被新凭据约束。
-- 怀疑泄露时：`token create`（轮换）→ 主机插件更新 token → 重启/重连；彻底失陷则 `revoke` 并检查控制面日志。
-
----
-
-## 9. 排障
-
-| 现象 | 可能原因 |
-|---|---|
-| `refusing to start relay without TLS` | 没配 `tls` 且未加 `--dev`；生产必须给控制面证书 |
-| `EADDRINUSE` | 80/443/8443 被占用（如已有 nginx/httpd/其他 relay） |
-| App 连 `<hostId>.<domain>` 报 TLS/连接重置 | relay 找不到该 host（离线/SNI 非 `<hostId>.<domain>`/泛解析未生效）；看 `--log-level debug` 的 `no route for SNI` |
-| TLS 握手卡住/`unexpected message` | 主机侧没有在 `host.opened` 后把 ClientHello 转给本机 TLS 监听，或 relay/主机帧方向错误 |
-| 控制面 401/连接被 1008 关闭 | token 不对/被吊销/hostId 不匹配；看 `control: rejected host ... invalid token` |
-| 主机频繁掉线 | 30s 内无任何控制消息 → 可能是主机网络不稳定或未响应 `host.heartbeat` |
-| 80 端口 301 正常但 https 打不开 | 控制面证书/端口问题 ≠ 443 透传问题；443 依赖主机在线与子域证书 |
-
-协议细节（控制消息、二进制帧格式）见 `packages/protocol/index.js`；管理 API 契约见 `docs/ADMIN-API.md`。
-
----
-
-## 10. 群体服务版（`group` 模式，P1 切片）
-
-> 仅 `feat/group-service` 分支；`main` 的 classic 行为不变。设计见
-> [docs/group-service-design.zh.md](../../../docs/group-service-design.zh.md)。
-
-`group` 模式 = 群体服务版 A 模式：**服务端终止 TLS + 主机自助注册 + 服务端推送**。
-P1 切片先实现「邀请码 → 主机自助注册」；边缘 TLS 终止与出站隧道在后续切片接入。
-启用：`--mode group` 且配置 `group.file`（默认 `<config 目录>/group.json`）。
-容器部署时也可以**不写 relay.json**：entrypoint 在 group 模式下会按 `.env`
-（`RELAY_DOMAIN` + 证书默认路径 / `RELAY_TLS_*`、`RELAY_GROUP_EDGE_*`）自动生成
-`/data/config/relay.json`（0600，已存在则不覆盖）；需要高级项时再手改该文件。
-
-```json
-{
-  "domain": "relay.example.com",
-  "mode": "group",
-  "group": {
-    "file": "/data/group.json",
-    "mobilePort": 11443,
-    "maxHosts": 200,
-    "apiPort": 9443,
-    "adminPort": 9444,
-    "adminBind": "0.0.0.0",
-    "publicControlPort": 8443,
-    "registration": { "enabled": true, "maxAttemptsPerMinutePerIp": 10, "maxAttemptsPerMinute": 120 }
-  }
-}
-```
-
-开邀请码（明文只打印一次；发给要加入的群成员）：
-
-```bash
-node bin/relay.js invite create --note "friend A" --max-uses 1 --expires-in 7d --config /etc/dsh-relay/relay.json
-node bin/relay.js invite list --config /etc/dsh-relay/relay.json
-node bin/relay.js invite revoke <inviteId|code> --config /etc/dsh-relay/relay.json
-node bin/relay.js host list --config /etc/dsh-relay/relay.json
-node bin/relay.js host revoke <hostId> --config /etc/dsh-relay/relay.json
-```
-
-注册接口（主机插件自动调用；配置 `group.apiPort` 后走**独立注册 API 面** `POST /__group/register`，
-生产为 HTTPS；未配置 `apiPort` 时退回控制面，兼容旧部署）：
+主机插件调用（`group.apiPort` 独立监听时走 HTTPS `POST /__group/register`；未配置 apiPort 时
+退回控制面，兼容旧部署）：
 
 ```json
 { "inviteCode": "<one-time invite code>", "hostName": "Living Room Mac" }
 → 200 { "ok": true, "protocolVersion": 1, "hostId": "h_ab12cd34xy",
         "hostToken": "<shown once>", "hostName": "Living Room Mac",
-        "relayDomain": "relay.example.com", "mobilePort": 11443,
+        "relayDomain": "relay.example.com", "mobilePort": 443,
         "controlUrl": "wss://relay.example.com:8443/control",
         "tokenPublicKey": "-----BEGIN PUBLIC KEY-----..." }
 ```
 
 `controlUrl` 是主机回连隧道的**控制面 WSS 地址**（host 取注册请求 Host，端口优先
-`group.publicControlPort`，否则取实际监听端口）：职责分离后注册 API 端口 ≠ WSS 端口，
-主机插件必须用它，而不是从服务地址推导。
+`group.publicControlPort`）：职责分离后注册 API 端口 ≠ WSS 端口，主机插件必须用它。
 
-**刷新注册**（`POST /__group/refresh`，同样挂在注册 API 面）用于服务端改了 `mobilePort` /
-`publicControlPort` 后让已注册主机同步，**不消耗邀请码**：
-
-```json
-POST /__group/refresh        Authorization: Bearer <hostToken>
-{ "hostId": "h_ab12cd34xy" }
-→ 200 { "ok": true, "protocolVersion": 1, "hostId": "...", "hostName": "...",
-        "relayDomain": "relay.example.com", "mobilePort": 1446,
-        "controlUrl": "wss://relay.example.com:18446/control",
-        "tokenPublicKey": "-----BEGIN PUBLIC KEY-----..." }
-```
-
-hostToken 错误 401、主机已撤销 403、主机不存在 404；主机插件在每次「重试连接」和重新拉起时
-会先调用它同步（旧 relay 无此接口时忽略、继续用缓存）。
+**刷新注册**（`POST /__group/refresh`，同一注册 API 面）用于服务端改了 `mobilePort` /
+`publicControlPort` 后让已注册主机同步，**不消耗邀请码**（`Authorization: Bearer <hostToken>`）。
 
 错误码：`invalid_request`(400) / `invalid_invite|invite_expired|invite_exhausted|registration_disabled`(403)
 / `host_limit`(409) / `rate_limited`(429，带 `Retry-After`)。
@@ -401,40 +303,17 @@ hostToken 错误 401、主机已撤销 403、主机不存在 404；主机插件�
 安全约定：
 
 - **邀请制**：没有有效邀请码一律拒绝；`registration.enabled=false` 可整体关闭。
-- `group.json`（0600）里 invite code **明文保存**（部署方后台/CLI 需随时查看复制）、host token 只存 **SHA-256**；
-  因此 `group.json` 属于敏感文件（含邀请码），泄露后应撤销全部邀请码并重建；
-  文件 `0600`、原子写；relay 每次注册请求重读，CLI 改动无需重启。
+- `group.json`（0600）里 invite code **明文保存**（后台/CLI 需随时查看复制）、host token 只存 **SHA-256**；
+  该文件属于敏感文件，泄露后应撤销全部邀请并重建。
 - hostId 由服务端分配（DNS label 安全、不可自定义）；友好名称仅展示用。
 - `mobilePort` 随注册下发，主机写进配对二维码（QR v2）。
-- `host revoke` 撤销主机后 token 失效；隧道接入后即时断链（当前切片尚无数据面）。
 
-### 边缘 TLS + 出站隧道（P1 切片 2）
+### 6.2 边缘 TLS + 出站隧道 + 设备会话
 
-`group.edge` 开启后，relay 在 `group.edge.port` 用**通配证书**终止手机 TLS，并把解密后的字节流
-经控制面隧道转发给主机（`host.open {kind:"group-edge"}` + 既有二进制 DATA/CLOSE 帧）；流量控制与
-心跳沿用现有机制（分帧、背压水位、心跳走控制 JSON 通道，互不阻塞）。
-
-```json
-"group": {
-  "file": "/data/group.json",
-  "edge": {
-    "enabled": true,
-    "port": 11443,
-    "tls": { "certFile": "/data/certs/wildcard/fullchain.pem",
-             "keyFile":  "/data/certs/wildcard/privkey.pem" },
-    "allowUnauthenticated": false
-  }
-}
-```
-
-- 证书必须覆盖 `*.<relayDomain>`（或所有主机子域），手机按 SNI 访问 `<hostId>.<domain>`。
-- `allowUnauthenticated: true` **仅 dev/test**（非 dev 配置会直接报错）：本切片尚未接入设备鉴权，
-  生产默认下边缘连接一律 **503 `edge_authentication_unavailable`**，不会放行。
-- 错误语义：非 `<hostId>.<domain>` 的 SNI → `421`；主机未注册/离线 → `502`；连接/流表超限 → `503`。
-- 已验证（`test/group-tunnel.test.js`）：通配证书握手、SNI→hostId 路由、8MB 大帧回显逐字节一致、
-  传输期间心跳不断（主机不被踢）、主机断线后边缘流清理。
-
-### 设备会话鉴权（P1 切片 3）
+`group.edge` **默认开启**（显式 `"enabled": false` 才关闭并 warn），relay 在 `group.edge.port`
+用**通配证书**终止手机 TLS，并把解密后的字节流
+经控制面隧道转发给主机（`host.open {kind:"group-edge"}` + 二进制 DATA/CLOSE 帧）；流量控制与
+心跳沿用控制面机制（分帧、背压水位、心跳走控制 JSON 通道，互不阻塞）。
 
 生产默认（`allowUnauthenticated:false`）下，边缘连接必须先拿到会话：
 
@@ -447,25 +326,40 @@ hostToken 错误 401、主机已撤销 403、主机不存在 404；主机插件�
      `Set-Cookie: __Host-dsh_session=…; Path=/; Secure; HttpOnly; SameSite=Strict`（默认 15 分钟）。
 3. **边缘校验**：业务请求带 cookie；relay 校验 token（Ed25519 签名 / 过期 / hostId / 设备未撤销）后才开隧道，
    未通过直接 401。**例外**：`/__dsh_remote/pair` 与 `/__dsh_remote/pair/status` 放行（一次性配对 secret +
-   主机确认保护，安全由主机侧 PairingManager 负责；仍有主机侧限速与一次性过期）。
+   主机确认保护；仍有主机侧限速与一次性过期）。
 4. **主机逐请求复验**：注册响应里的 `tokenPublicKey`（PEM）可离线校验 token（协议库
-   `verifyGroupSessionToken`），主机无需回连 relay；设备撤销以 host 设备表为权威源。
+   `verifyGroupSessionToken`），设备撤销以主机设备表为权威源。
 
 `group.auth` 配置：`tokenTtlMs`（5s–2h，默认 15min）、`challengeTtlMs`（10s–10min，默认 2min）、
 `maxAttemptsPerMinutePerIp`（默认 30）、`signingKeyFile`（默认 `<group.json 目录>/signing-key.pem`，
 Ed25519、0600、首次启动自动生成；**私钥只在 relay，主机只拿公钥**）。
 
-### 接口分层（P1 切片 9：职责分离）
+错误语义：非 `<hostId>.<domain>` 的 SNI → `421`；主机未注册/离线 → `502`；连接/流表超限 → `503`。
 
-| 面 | 配置 | 默认端口 | 只做 |
-|---|---|---|---|
-| 手机 edge | `group.edge.port` | 443 | 手机 App 流量（relay 终止 TLS） |
-| 控制面 WSS | `controlPort` | 8443 | `host.hello` 鉴权、心跳、`host.open`、流帧——**只接受 WebSocket upgrade** |
-| 注册 API | `group.apiPort` | 9443 | `POST /__group/register` |
-| 部署方后台 | `group.adminPort` + `group.adminBind` | 9444（默认绑 127.0.0.1） | `/__admin` 页面 + JSON API |
+### 6.3 部署方后台（`/__admin`）
+
+配置了 `adminPort` 时是独立后台面（默认只绑回环），否则退回控制面端口：
+
+```
+https://<relayDomain>:<adminPort>/__admin/
+```
+
+推荐经 nginx 反代到 `admin.<domain>` 并加 basic auth / IP 白名单，或用 SSH 隧道访问；
+**不要**直接把这个端口暴露公网。页面可以：查看域名/手机端口/在线主机数；生成邀请码（备注、
+可用次数、有效期）；列邀请码并撤销；列主机（在线/离线/已撤销）并撤销主机。数据全部来自
+`group.json`，页面每 10 秒自动刷新。
+
+**鉴权**：`Authorization: Bearer <admin token>` 请求头（**不使用查询参数 token / 来源 IP 作为身份**），
+失败限速（同 IP 5 分钟 10 次后 429）。token 来源优先级：
+
+1. `group.adminToken` 配置 / 环境变量 `RELAY_ADMIN_TOKEN`；
+2. token 文件 `group.adminTokenFile`（默认 `<group.json 目录>/admin-token`，0600；**首次启动自动生成**）；
+3. 本机查看：`node bin/relay.js admin-token --config /etc/dsh-relay/relay.json`（`--json` 可机器读）。
+
+### 6.4 接口分层
 
 配置 `apiPort` / `adminPort` 后，控制面**不再**提供注册/后台路由（普通 HTTP 一律 404）；
-不配置时保持旧的「都挂在控制面」行为（向后兼容）。
+不配置时保持「都挂在控制面」的兼容行为。
 
 ```json
 "group": {
@@ -477,42 +371,76 @@ Ed25519、0600、首次启动自动生成；**私钥只在 relay，主机只拿�
 }
 ```
 
-容器部署时 `adminBind` 设为 `0.0.0.0`（由 Docker 端口映射限制宿主机只绑回环）。
-`publicControlPort` 是注册响应下发 `controlUrl` 用的**公网** WSS 端口：nginx 前置时 = nginx 实际 listen 的端口
-（如 8443 或自定义 18446），直连时 = 容器 8443 的宿主映射端口。relay 不会自动探测，填错会导致主机 control socket error。
+`publicControlPort` 是注册响应下发 `controlUrl` 用的**公网** WSS 端口：nginx 前置时 = nginx 实际
+listen 的端口，直连时 = 宿主映射端口。relay 不会自动探测，填错会导致主机 control socket error。
 
-### 部署方后台（`/__admin`，P1 切片 7）
+---
 
-group 模式启动后，部署方在浏览器打开（配置了 `adminPort` 时是独立后台面，默认只绑回环）：
+## 7. 健康检查
 
+```bash
+curl -s http://127.0.0.1/healthz    # 200
+# {"ok":true,"domain":"relay.example.com","hosts":["h_ab12cd34"]}
 ```
-https://<relayDomain>:<adminPort>/__admin/
+
+- `hosts` 是当前在线（控制面已鉴权且心跳正常）的 hostId 列表；主机离线时为空数组。
+- **仅** `GET/HEAD /healthz` 返回 200；其余路径/方法一律 404（classic 的 80→443 301 跳转已删除）。
+- 控制面端口只接受 WebSocket upgrade，探针请打 **httpPort 的 `/healthz`**（容器 HEALTHCHECK 已内置）。
+
+---
+
+## 8. 连接限制（DoS 兜底）
+
+```json
+{ "limits": { "maxConnectionsPerIp": 64, "maxEdgeConnections": 1024 } }
 ```
 
-推荐经 nginx 反代到 `admin.<domain>` 并加 basic auth / IP 白名单（见 `server/nginx/group-admin-http.conf`），
-或用 SSH 隧道访问；不要直接把这个端口暴露公网。
+- `maxConnectionsPerIp`：同一来源 IP 允许的并发边缘 TLS 连接数（默认 64）；
+- `maxEdgeConnections`：全站并发边缘连接上限（默认 1024；旧名 `maxDataConnections` 仍接受）。
+- 超限连接会被立即销毁并记 warn 日志；这是 DoS 兜底，不替代主机侧设备鉴权。
 
-页面可以：查看域名/手机端口/在线主机数；**生成邀请码**（备注、可用次数、有效期；后台不展示明文，只提供「复制」按钮）；
-注意：列表里的 `inv_xxx` 是**邀请码 ID，不能当邀请码用**；真正要填给主机/App 的是生成时显示的
-**43 字符 base64url 邀请码**（只显示一次，丢了只能新建；store 只存哈希）。
-列邀请码并撤销；列主机（在线/离线/已撤销）并撤销主机。数据全部来自 `group.json`，页面每 10 秒自动刷新。
+---
 
-**鉴权**：`Authorization: Bearer <admin token>` 请求头（不使用查询参数 token / 来源 IP 作为身份），
-失败限速（同 IP 5 分钟 10 次后 429）。token 来源优先级：
+## 9. 日志与隐私
 
-1. `group.adminToken` 配置 / 环境变量 `RELAY_ADMIN_TOKEN`；
-2. token 文件 `group.adminTokenFile`（默认 `<group.json 目录>/admin-token`，0600；**首次启动自动生成**）；
-3. 本机查看：`node bin/relay.js admin-token --config /etc/dsh-relay/relay.json`（`--json` 可机器读）。
+- 会记录：hostId、在线/离线、来源 IP:port、streamId、字节数（debug）、错误码、心跳超时、
+  token 校验失败（不含 token 值）、注册/撤销动作。
+- **不会记录**：手机/主机明文内容、HTTP 正文、host token / 设备 token 明文、私钥。
+- 默认 `logLevel: info`；排查时可用 `--log-level debug`（会打印每条流/连接的开闭，仍不含内容）。
+- **A 模式部署方可见明文**（relay 终止 TLS）：请在部署文档与告知中明示，日志与磁盘仍按上面的
+  最小化原则处理；不要开启会记录请求体的反向代理配置。
+- **dev 模式是明文控制面**（host token 在网络上裸奔），只能在本机/隔离测试网使用；公网必须 TLS。
 
-安全说明：管理页 HTML 本身不返回任何数据（token 由部署方粘贴后存浏览器 localStorage，不落日志）。
-配置 `adminPort` 后后台与主机隧道/注册**物理分离**：控制面只跑 WSS，后台默认绑 127.0.0.1，
-靠 admin token + 失败限速保护，再经 nginx/SSH 隧道访问；admin token 只给部署方、不要发给群成员。
-（未配置 `adminPort` 时退回旧行为：后台与主机隧道共用控制面端口。）
+---
 
-**容器镜像**：`dsh-remote-relay:0.2.14-group`（`docker compose -f server/docker-compose.group.yml up -d --build`）；
-group 模式不启动 classic 的 443 L4 透传，边缘 TLS 直接监听 `group.edge.port`。离线部署见
-[`server/README.md` §10](../../../server/README.md)。
+## 10. 排障
 
-**P1 切片边界**：已落「注册/开通」+「边缘 TLS + 隧道」+「设备会话鉴权（relay 边缘）」+「部署方后台」+「接口职责分离（edge/WSS/API/admin 四个面）」。
-**主机插件侧 group 接入（注册客户端 / 本地明文代理 / 逐请求复验 / 设置页）、QR v2、App token 流程**
-在下一片接入；在此之前 `group` 模式不能用于生产（`allowUnauthenticated` 仅测试）。
+| 现象 | 可能原因 |
+|---|---|
+| `refusing to start relay without TLS` | 没配 `tls` 且未加 `--dev`；生产必须给控制面证书 |
+| `group relay requires group.file` | 没配 `group.file`（或旧 classic 配置被使用）；群体版必须有 group.json |
+| `group edge requires TLS` | `group.edge` 默认开启但没配通配证书（`group.edge.tls`）；纯本地调试可显式 `"enabled": false` / CLI `--no-group-edge` |
+| `EADDRINUSE` | 80/443/8443/9443/9444 被占用（nginx/其他进程） |
+| 手机连 `<hostId>.<domain>` 失败 | 主机离线 / sni 非 `<hostId>.<domain>` / 泛解析未生效；看 `--log-level debug` 的 `edge: dropping ... no route for SNI` |
+| 边缘 421 | SNI 不是 `<hostId>.<relayDomain>` |
+| 边缘 502 | 主机未注册/离线（控制面未连接） |
+| 边缘 401 | 没有/过期的 `__Host-dsh_session` cookie；设备需重新 challenge→token 或该设备已撤销 |
+| 控制面 401/1008 | host token 不对/主机被撤销/hostId 不匹配；看 `control: rejected host ... invalid token` |
+| 主机频繁掉线 | 30s 内无任何控制消息 → 主机网络不稳定或未响应 `host.heartbeat` |
+| 后台 401 | admin token 不对/未带 `Authorization: Bearer`；token 在 `data/admin-token` |
+
+协议细节（控制消息、二进制帧格式）见 `packages/protocol/index.js`；主机插件管理 API 契约见
+`dsh-remoteService/docs/ADMIN-API.md`；群体版设计见 [docs/group-service-design.zh.md](../../../docs/group-service-design.zh.md)。
+
+---
+
+## 11. 版本记录
+
+- **0.3.0**（`feat/group-service`）：relay 只保留群体服务版（A 模式）——删除 classic 数据面 TLS
+  透传（`dataServer`/`dataPort`）、classic HTTP 跳转面（80 端口只留 `/healthz`）、relay 侧推送
+  （`lib/push.js`、Expo/APNs 配置与测试）、classic token 存储/CLI（`tokens.json`、
+  `token create/list/revoke`、`hostTokens` 配置）与 SNI 透传解析（`lib/sni.js`）、classic 测试；
+  `tokens.js` 缩为 hostId 校验 + host token 生成辅助（群体版注册仍用）；配置去掉 `mode: classic`、
+  `dataPort`、`tokensFile`、`push`（旧字段忽略并告警）；`group.edge.enabled` 默认改为 **true**
+  （手机数据面是核心功能，显式 false 才关闭并 warn）；版本号升 0.3.0。
+- 0.2.x：群体版 P1 切片（注册/边缘 TLS/隧道/设备会话/后台/接口分层）与 classic 并存。
