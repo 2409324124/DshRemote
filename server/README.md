@@ -70,6 +70,8 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose --env-file .env.group -f dock
 # B. 服务器离线镜像（推荐生产）
 docker load -i dsh-relay-0.3.0-group-linux-amd64.tar
 docker compose --env-file .env.group -f docker-compose.group.yml up -d --no-build
+# 校验离线包：sha256 应为
+# 206208af1a28a4d0e78139216ebbffd431f3485efab7f7d4bc79c17518691ce0
 ```
 
 生产服务器建议整理成标准目录（Compose 不关心文件名，只关心 `-f` 与 env 文件）：
