@@ -6,6 +6,62 @@
 
 ---
 
+## 群体服务版（A 模式 / token 鉴权）真机验收记录 — 2026-11-01
+
+> 分支 `feat/group-service`：relay 终止 TLS、主机出站隧道、设备 P-256 密钥 + 短时 token
+> （无客户端证书）。**用户于 2026-11-01 确认通过**（原话要点：切回 nginx 前置链路后重新配对，
+> 可正常进入界面）。以下标识全部脱敏。
+
+| 项目 | 值 |
+|---|---|
+| App | 0.1.0（群体版起始版本线）buildNumber 6（iOS Release，真机安装） |
+| host-plugin | 0.1.23 |
+| relay | 0.2.13（验收镜像）；0.2.14 仅日志降噪，功能一致 |
+| 设备 | iPhone 真机（iOS 真机系统，Secure Enclave P-256）；UDID/序列号不入库 |
+| 网络 | 5G 蜂窝 / Wi-Fi 均验证；公网 relay + 部署方 nginx 前置链路 |
+
+### 验收项
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 扫码配对（v2 token 模式） | ✅ | relay `challenge issued` + `token issued`，主机设备表新增设备 |
+| 配对后立刻进入 | ✅ | 无 401/404；token 一次签发，页面直接加载 |
+| DSH 手机布局 | ✅ | 左侧抽屉覆盖式（不挤压正文）、点会话放大、返回正常 |
+| 页面内导航 | ✅ | 不再跳到 App 内嵌浏览器（隧道地址带端口时也识别为隧道内） |
+| WebSocket 实时通道 | ✅ | `/api/remote.mux` 经隧道升级成功，可收发流式消息 |
+| 配对后「重试」可用 | ✅ | 修复前「重试才能进」的连接复用问题已消除 |
+| 设备「最近连接」 | ✅ | 群体版鉴权成功即更新 `lastSeen`，管理台不再显示「从未连接」 |
+| 停用 nginx 直连对照 | ✅ | 直连 edge 端口与 nginx SNI 前置两种形态均可用 |
+
+### 本分支修复的问题（对应现象）
+
+1. **配对后立刻 401、点重试又能进**：relay 边缘隧道只处理连接上第一个请求，iOS keep-alive
+   复用连接导致 pairing 之后的 challenge 被透传到主机明文代理。修复：relay 对隧道化请求强制
+   `Connection: close`（WebSocket Upgrade 除外）。
+2. **页面能开但「暂无会话 / 一直重新连接中」**：主机 loopback 明文代理未处理 WebSocket 升级。
+   修复：host-plugin 增加 upgrade 代理（同一套 token+设备校验后交给 `DshProxy.handleUpgrade`）。
+3. **跳内嵌浏览器 / 手机布局丢失**：隧道地址带显式端口时被误判为外链。修复：隧道 URL 按
+   hostname（忽略端口）匹配。
+4. **设备失效后无限 401/重试**：relay 返回 `unknown_device` 时 App 给出「设备已在主机侧失效，
+   请删除本机连接重新扫码配对」的明确提示，并只对刚配对窗口做一次短暂重试。
+5. **challenge 并发/重复导致 token 401**：relay 允许同一设备多个未消费 challenge（互不覆盖）。
+6. **配对后 redirect 的旧连接**：relay 在主机控制连接替换/短暂重连时不再清空设备表。
+
+### 回归命令（本机）
+
+```bash
+cd dsh-remoteService && npm test            # 195/195
+cd dsh-remoteService && npm run validate:artifacts
+cd dsh-remoteApp && npx tsc --noEmit
+cd dsh-remoteApp && npm run check:native
+cd dsh-remoteApp && npm run check:shell
+# iOS Release 构建（buildNumber 6）
+xcodebuild -workspace DSHRemote.xcworkspace -scheme DSHRemote -configuration Release \
+  -destination 'generic/platform=iOS' build
+```
+
+---
+
 ## 0. 环境就绪检查
 
 > 如果 Xcode 已安装但 `npm run check:ios-env` 仍报错，通常还需要（需管理员密码）：

@@ -7,6 +7,20 @@
 POC 与 MVP 的**代码、文档、测试、部署产物、本地端到端验收均已完成**；
 剩余 3 项需要外部环境：**iOS 真机验收（需 Xcode/iPhone）、Android 编译（需 Android SDK）、生产 relay 上线（需 VPS+域名）**。
 
+## 2026-11-01 群体服务版（`feat/group-service`）真机验收通过
+
+- **范围**：A 模式群体服务（relay 终止 TLS、主机出站隧道、设备 P-256 密钥 + 短时 token、
+  无客户端证书；服务端自助注册 + 邀约；部署方后台）。
+- **版本**：App **0.1.0 (buildNumber 6)**、host-plugin **0.1.23**、relay **0.2.13**（验收镜像；
+  0.2.14 仅把逐请求日志降回 debug，功能一致）。
+- **验收**：用户 2026-11-01 确认真机通过（扫码配对 → 立刻进入无 401 → 手机布局/会话放大/
+  实时消息正常；切回 nginx 前置链路重新配对亦正常）。记录见
+  `dsh-remoteApp/docs/ACCEPTANCE.md`「群体服务版真机验收记录」。
+- **关键修复**：relay 隧道化请求强制 `Connection: close`（keep-alive 复用导致配对后 401）；
+  host-plugin 代理 WebSocket 升级（页面空/一直重连）；隧道 URL 端口识别（避免跳内嵌浏览器、
+  恢复手机端布局）；`unknown_device` 明确重配对提示；多 challenge 并存；重连不清设备表。
+- **部署**：见 `server/README.md` §10（relay 镜像 + nginx SNI 前置 / 直连两种形态）。
+
 ## 2026-10-27 修复：应用内通知卡片停留时间 5s → 20s
 
 - **现象**：跨会话推送的应用内卡片只停留 5 秒，来不及点就自动消失。
