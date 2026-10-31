@@ -10,7 +10,7 @@
 | relay | **0.3.0**（镜像 `dsh-remote-relay:0.3.0-group`） | 只保留群体版：控制面 WSS + 注册 API + 部署方后台 + 边缘 TLS/鉴权/隧道 |
 | host-plugin | **0.2.1** | 只保留群体版：注册/隧道/loopback 明文代理（HTTP+WS）/群体配对/设置 UI；推送已删除；**远程重启主机恢复为可选组件（默认关闭）** |
 | protocol | **0.2.0** | 只保留群体版协议常量/QR v2/帧/签名校验 |
-| App | **0.1.1（iOS build 7 / Android versionCode 7）** | 只有群体 token 模式；mTLS/推送/远程重启/通知 UI 已删除；**待本轮真机验收** |
+| App | **0.1.2（iOS build 8 / Android versionCode 8）** | 只有群体 token 模式；mTLS/推送/通知 UI 已删除；**App 锁触发/位置已修**，**远程重启主机 UI 已恢复**；待真机验收 |
 
 ## 验收状态
 
@@ -30,8 +30,9 @@
   relay push、tokens.json/主机 token CLI、classic 配置；`mode` 只接受 group，缺省即群体版；
   边缘默认开启（显式关闭才 warn）。
 - **App**：删除 iOS/Android 原生 mTLS（CSR/identity/network/mTLS WebView）、classic 配对与证书存储、
-  原生 WebView 分支、APNs/通知/应用内通知卡片、远程重启 UI、通知设置与证书诊断；
-  保留群体配对/token 会话/主机列表/设备与安全/RN WebView + 手机壳/内嵌浏览器。
+  原生 WebView 分支、APNs/通知/应用内通知卡片、通知设置与证书诊断；保留群体配对/token 会话/
+  主机列表/设备与安全/RN WebView + 手机壳/内嵌浏览器；**远程重启 UI 恢复**（Bearer/cookie 原生请求），
+  **App 锁只在冷启动/打开主机连接时触发并移到设置页**。
 - **server/**：删除 classic compose/env/nginx 模板与 host 证书脚本，只保留群体版
   `docker-compose.group.yml` + `.env.group.example` + group nginx 配置。
 - **protocol / docs / scripts**：清理 classic 协议符号、classic POC/部署脚本与经典文档；
