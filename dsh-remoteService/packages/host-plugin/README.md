@@ -2,8 +2,9 @@
 
 > 许可证：**AGPL-3.0-or-later**（完整文本见根目录 [`LICENSE`](../../../LICENSE)）。
 >
-> 版本 **0.2.0**：本插件已剥离 classic/单体版的 mTLS、主机证书、自托管推送与远程重启，
-> **只保留群体服务版（A 模式）主机能力**。旧版配置字段会被忽略，升级后需要重新注册一次。
+> 版本 **0.2.1**：本插件只保留群体服务版（A 模式）主机能力（classic/单体版的 mTLS、主机证书、
+> 自托管推送已剥离）；**「重启主机 DSH」作为可关闭的「组件」在群体版恢复**（默认关闭）。
+> 旧版配置字段会被忽略，升级后需要重新注册一次。
 
 运行在 **DSH 主机** 上的远程访问插件，提供：
 
@@ -12,7 +13,9 @@
 - 本机 **loopback 明文 HTTP/WS 代理**：逐请求校验 relay 签名 token + 设备在册后反代到
   `127.0.0.1` 的 DSH Web；
 - **群体版设备配对**（二维码 v2 + 一次性密钥 + 桌面确认 + P-256 设备公钥登记）；
-- 桌面 DSH 设置页 / 侧栏入口（注册、状态、配对、设备撤销、审计）；
+- **「重启主机 DSH」组件**（可关闭，默认关闭）：手机经隧道 `POST /__dsh_remote/restart`
+  让主机调度 detached helper 重启整个 DSH 客户端（桌面端整组重启 / Node CLI 原样拉起）；
+- 桌面 DSH 设置页 / 侧栏入口（注册、状态、配对、设备撤销、审计、组件开关）；
 - 本机管理 API（仅本机已认证浏览器可访问）。
 
 relay 的部署（含 TLS / 注册 API / 边缘配置）见 [`../../../server/README.md`](../../../server/README.md)。
@@ -74,6 +77,7 @@ DSH 设置 → 远程访问。配置落盘在 `~/.dsh/remote-access/config.json`
 | `groupInviteCode` | 一次性邀请码；注册成功后自动清空 |
 | `groupPlainPort` | loopback 明文代理端口（默认 `0` = 随机；只被本机隧道客户端连接） |
 | `groupInsecure` | 仅 POC：允许 http/ws 与自签证书（生产必须 https/wss） |
+| `restartHostEnabled` | 「组件」：允许手机重启主机 DSH（**默认关闭**；关闭时 App 隐藏 ⏻、重启接口 501） |
 | `denyPrefixes` | 反代 deny list（`/connect`、`/oauth`、`/open-in-app`、`/api/remote-access`、`/__dsh_remote`） |
 | `maxRequestBytes` | 远程代理请求体上限（默认 256 MiB） |
 
@@ -84,13 +88,14 @@ DSH 设置 → 远程访问。配置落盘在 `~/.dsh/remote-access/config.json`
 ### 从单体版（≤0.1.x）升级
 
 classic 配置字段（`relayUrl` / `relayDomain` / `hostId` / `hostToken` / `publicPort` /
-`tlsCertFile` / `tlsKeyFile` / `push*` / `apns*` / `restartHostEnabled` 等）已从 schema 删除，
+`tlsCertFile` / `tlsKeyFile` / `push*` / `apns*` / `groupEnabled` 等）已从 schema 删除，
 读取时会被忽略、保存时不会写回。升级后：
 
 1. 在设置页填「服务地址（注册 API 端口）+ 邀请码」→ 点「注册并连接」；
 2. 删除不再使用的旧 TLS 证书 / 设备 CA 目录（如 `~/.dsh/remote-access/certs`、
    `~/.dsh/remote-access/device-ca`）与 `push-tokens.json`（可选，插件不再读取）；
 3. 旧手机 App 的 mTLS 连接不再可用，需用群体版 App 重新扫码配对。
+4. 「允许手机重启主机 DSH」已迁移到「设置 → 远程访问 → 组件」；默认仍为关闭，需要时再打开。
 
 ---
 
@@ -141,13 +146,62 @@ Host 半注册在 DSH 本机 webServer：
 |---|---|
 | `POST /__dsh_remote/pair` | 手机提交配对公钥（一次性 secret + 主机确认保护） |
 | `GET /__dsh_remote/pair/status?ticket=` | 配对确认轮询 |
-| `GET /__dsh_remote/status` | 已鉴权设备可读的主机状态（token 模式） |
+| `GET /__dsh_remote/status` | 已鉴权设备可读的主机状态（见下） |
+| `POST /__dsh_remote/restart` | 远程重启主机 DSH（「组件」开启时；成功 202） |
+
+会话凭证两种等价形式（同一份 relay 签名 token、同一套离线验签 + 设备在册校验）：
+
+- `Cookie: __Host-dsh_session=<token>`（浏览器 WebView / relay 边缘默认）；
+- `Authorization: Bearer <token>`（App 的 JS fetch；本轮 relay 边缘以 cookie 为主，
+  该形式保留为等价兜底，便于本地调试与后续 relay 支持）。
+
+`GET /__dsh_remote/status` 响应（`ok:true`）：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "hostId": "h_ab12cd34",
+    "hostName": "<HOST_NAME>",
+    "domain": "h_ab12cd34.relay.example.com",
+    "auth": "token",
+    "relayConnected": true,
+    "version": "0.2.1",
+    "restart": { "enabled": false },
+    "devices": { "total": 1, "active": 1 }
+  }
+}
+```
+
+`POST /__dsh_remote/restart`（仅 POST，body 可为空）：
+
+| 状态 | 响应 | 含义 |
+|---|---|---|
+| 202 | `{"ok":true,"data":{"restarting":true,"mode":"desktop-app\|node"}}` | 已安排重启；helper 约 1s 后动手，先让 202 返回 |
+| 401 | `{"ok":false,"error":{...}}` | 未带有效 token（cookie/Bearer 都没有或验签失败/设备已撤销） |
+| 405 | `{"ok":false,"error":{"code":"method-not-allowed",...}}` | 非 POST |
+| 501 | `{"ok":false,"error":{"code":"host-restart-disabled",...}}` | 「组件」未开启（`restartHostEnabled !== true`） |
+| 501 | `{"ok":false,"error":{"code":"host-restart-unavailable",...}}` | 当前运行环境/插件版本未接入重启调度 |
+| 501/500 | `{"ok":false,"error":{"code":"host-restart-unsupported\|host-restart-failed",...}}` | 环境不支持 / 调度 helper 失败 |
+
+审计：`host-restart` 动作，`result=accepted`（`hash` = 重启模式或 `deduped`）或
+`result=failed`（`hash` = `disabled` / `not-enabled` / 失败码），`deviceId` 为发起设备。
+
+重启范围（`lib/host-restart.js`）：
+
+- **DSH 桌面端（Electron shell + host 子进程）**：目标是整个应用进程组（shell 为组长），
+  helper 直接 SIGKILL shell → 清理残留与旧单实例锁 → `open -n <DSH.app>` 重新拉起（失败再
+  兜底直接执行 `.app` 内可执行文件）；不会只杀 host 子进程（那只会弹出崩溃对话框）。
+- **Node CLI（`dsh web` 等）**：SIGTERM 本进程后按 `execPath + argv` 原样拉起。
+- **Windows**：Desktop 以 shell pid 为 `taskkill` 目标再 `start` 重新拉起（best-effort）。
+- 10s 去重窗口（连点/App 重试只调度一次）；`DSH_REMOTE_DISABLE_HOST_RESTART=1` 时一律拒绝
+  调度（测试/CI 防误重启）。重启期间连接会短暂断开，随后 App 自动重连。
 
 其余已鉴权请求反代到本机 DSH Web。`/api/remote-access/*` 对远程设备一律拒绝；
 `/connect`、`/oauth`、`/open-in-app*`、`/__dsh_remote/*` 等本机敏感路径同样在 deny list 内。
 
-**群体版不提供**：主机 TLS 监听、设备证书/mTLS、APNs/Expo 推送、远程重启主机。
-推送等能力由服务端（部署方）在后续切片统一提供，主机端不再发送任何通知。
+**群体版不提供**：主机 TLS 监听、设备证书/mTLS、APNs/Expo 推送。推送等能力由服务端
+（部署方）在后续切片统一提供，主机端不再发送任何通知。
 
 ---
 
@@ -161,6 +215,8 @@ Host 半注册在 DSH 本机 webServer：
 - DSH Web 始终保持 `127.0.0.1`，插件剥离客户端头并注入本机 session cookie。
 - 配对密钥一次性且短时有效；主机侧另有限速；设备可撤销（主机设备表 + relay 会话双保险）。
 - 管理 API 只允许本机已认证 DSH 浏览器访问；远程设备一律 403。
+- 「重启主机」组件默认关闭；开启后仍要求设备 token 鉴权（cookie/Bearer 等价）且设备未撤销，
+  关闭时接口直接 501，不进入调度。
 
 ---
 
@@ -195,6 +251,8 @@ Host 半注册在 DSH 本机 webServer：
 | 手机 401/403 | 设备是否已配对且未撤销？token 是否过期（App 自动续期）？Host 头是否等于 `<hostId>.<relayDomain>`？ |
 | 配对二维码过期 | 重新生成；配对密钥 ≤120s |
 | 手机打开管理 API 403 | 这是安全边界；远程设备不允许管理本地插件 |
+| App 没有「重启主机 ⏻」按钮 / 重启报 `host-restart-disabled` | 「设置 → 远程访问 → 组件」里「允许手机重启主机 DSH」是否开启（默认关闭）；保存后 status 的 `restart.enabled` 应为 true |
+| 重启报 `host-restart-unavailable` / `host-restart-unsupported` | 插件版本过旧，或当前运行环境不支持自动重启（如 Linux Electron）；本机手动重启仍可用 |
 | 打开大会话「载入历史」很久/失败、画面反复跳 | 插件是否为 ≥0.2.0 且已重启 DSH；手机 WebView 是否加载了历史分片；relay 带宽/线路是否过慢；详见 [`docs/diagnostics/09-mobile-history-slicing.md`](../../../docs/diagnostics/09-mobile-history-slicing.md) |
 
 ---

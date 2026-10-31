@@ -24,7 +24,8 @@ relay，邀约一小群朋友/同事把各自的 DSH 主机接入，用手机 Ap
 - **App**：扫码配对（QR v2，`auth=token`）→ 用 Secure Enclave / Android Keystore 里的 P-256
   设备密钥对 relay challenge 签名 → 换 15 分钟短时 token → `__Host-dsh_session` cookie 访问自己的主机。
 - **主机插件**：跑在 DSH 主机上，负责群体版配对、注册/刷新、出站 WSS 隧道、loopback 明文代理
-  （HTTP + WebSocket 升级）到本机 DSH；默认拒绝外网入站。
+  （HTTP + WebSocket 升级）到本机 DSH；默认拒绝外网入站。可选「允许手机重启主机 DSH」组件
+  （默认关闭，开启后 App 顶栏出现重启按钮）。
 - **relay**：部署方自建，终止手机 TLS（需要 `*.relayDomain` 通配证书），负责设备会话鉴权、
   主机隧道、邀请码注册、部署方后台。
 

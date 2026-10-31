@@ -8,7 +8,7 @@
 | 组件 | 版本 | 状态 |
 |---|---|---|
 | relay | **0.3.0**（镜像 `dsh-remote-relay:0.3.0-group`） | 只保留群体版：控制面 WSS + 注册 API + 部署方后台 + 边缘 TLS/鉴权/隧道 |
-| host-plugin | **0.2.0** | 只保留群体版：注册/隧道/loopback 明文代理（HTTP+WS）/群体配对/设置 UI；**推送与远程重启已删除** |
+| host-plugin | **0.2.1** | 只保留群体版：注册/隧道/loopback 明文代理（HTTP+WS）/群体配对/设置 UI；推送已删除；**远程重启主机恢复为可选组件（默认关闭）** |
 | protocol | **0.2.0** | 只保留群体版协议常量/QR v2/帧/签名校验 |
 | App | **0.1.1（iOS build 7 / Android versionCode 7）** | 只有群体 token 模式；mTLS/推送/远程重启/通知 UI 已删除；**待本轮真机验收** |
 
@@ -23,8 +23,9 @@
 ## 本轮（2026-11-01）剥离内容
 
 - **host-plugin**：删除 classic TLS/mTLS/证书/CSR/CA、classic 配对、APNs/Expo 推送、
-  `session/event` 推送监听、远程重启主机、`/__dsh_remote/{status,audit,devices,push-token,restart}`
-  等 classic 接口；配置只剩群体字段（旧字段读入即丢弃）。
+  `session/event` 推送监听与 `/__dsh_remote/{audit,devices,push-token}` 等 classic 接口；
+  **远程重启主机保留为群体版可选组件**（0.2.1 恢复：`/__dsh_remote/status|restart` 走群体隧道，
+  cookie/Bearer 鉴权，默认关闭，需在主机「设置 → 远程访问 → 组件」开启）；配置只剩群体字段。
 - **relay**：删除 classic 数据面 TLS 透传（443 盲转发）、classic HTTP 面（301/admin/push/devices）、
   relay push、tokens.json/主机 token CLI、classic 配置；`mode` 只接受 group，缺省即群体版；
   边缘默认开启（显式关闭才 warn）。
