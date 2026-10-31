@@ -2,12 +2,10 @@
 
 > 许可证：**AGPL-3.0-or-later**（完整文本见根目录 [`LICENSE`](../../../LICENSE)）。
 >
-- **0.2.3**：保存「组件 → 允许手机重启主机」后主动断开 App 的 WebSocket 连接（仅 Upgrade 连接，隧道不受影响），
-  App 的 ws-close 自动恢复会立即重载页面并重新拉 status，顶栏 ⏻ 无需退出重进即可出现/消失；
-> 版本 **0.2.2**：本插件只保留群体服务版（A 模式）主机能力（classic/单体版的 mTLS、主机证书、
+> 版本 **0.2.4**：本插件只保留群体服务版（A 模式）主机能力（classic/单体版的 mTLS、主机证书、
 > 自托管推送已剥离）；**「重启主机 DSH」作为可关闭的「组件」在群体版恢复**（默认关闭）。
-> 0.2.2 修复「组件开关保存失败」：历史配置缺 `groupServiceUrl` 时自动从 `group.json` 回填，
-> 且纯状态字段（如 `restartHostEnabled`）保存不再重建隧道。
+> 0.2.4 收窄组件保存后的连接断开范围：**只断 DSH 主实时通道 `/api/remote.mux`**，其它 WebSocket
+> 保留，避免 App 一次收到多条 `dsh-ws-close` 把自动恢复预算（60s 内 2 次）耗尽。
 > 旧版配置字段会被忽略，升级后需要重新注册一次。
 
 运行在 **DSH 主机** 上的远程访问插件，提供：
@@ -172,7 +170,7 @@ Host 半注册在 DSH 本机 webServer：
     "domain": "h_ab12cd34.relay.example.com",
     "auth": "token",
     "relayConnected": true,
-    "version": "0.2.2",
+    "version": "0.2.4",
     "restart": { "enabled": false },
     "devices": { "total": 1, "active": 1 }
   }
@@ -258,6 +256,7 @@ Host 半注册在 DSH 本机 webServer：
 | 配对二维码过期 | 重新生成；配对密钥 ≤120s |
 | 手机打开管理 API 403 | 这是安全边界；远程设备不允许管理本地插件 |
 | App 没有「重启主机 ⏻」按钮 / 重启报 `host-restart-disabled` | 「设置 → 远程访问 → 组件」里「允许手机重启主机 DSH」是否开启（默认关闭）；保存后 status 的 `restart.enabled` 应为 true |
+| 保存组件开关后 App 提示「自动重连未恢复，请点击刷新重试」 | 插件是否 ≥0.2.4（0.2.3 会一次断开所有 WS，耗尽 App 自动恢复预算）；升级 0.2.4 后应只断 `/api/remote.mux` 一条主通道，App 自动 reload |
 | 重启报 `host-restart-unavailable` / `host-restart-unsupported` | 插件版本过旧，或当前运行环境不支持自动重启（如 Linux Electron）；本机手动重启仍可用 |
 | 打开大会话「载入历史」很久/失败、画面反复跳 | 插件是否为 ≥0.2.0 且已重启 DSH；手机 WebView 是否加载了历史分片；relay 带宽/线路是否过慢；详见 [`docs/diagnostics/09-mobile-history-slicing.md`](../../../docs/diagnostics/09-mobile-history-slicing.md) |
 
@@ -274,6 +273,18 @@ Host 半注册在 DSH 本机 webServer：
 
 ## 10. 变更记录
 
+- **0.2.4**（修复 App「自动重连未恢复，请点击刷新重试」）
+  - 保存「组件 → 允许手机重启主机 DSH」后不再断开**所有** Upgrade/WS 连接：跟踪每条 Upgrade
+    的请求 pathname，默认**只断开 DSH 主实时通道 `/api/remote.mux`**（其它插件/子页面 WS 保留）。
+    0.2.3 一次断开多条会让 App 在同一瞬间收到多个 `dsh-ws-close`，把自动恢复预算
+    （60s 内 2 次）一次耗尽、不再自动 reload。
+  - `closeUpgradedConnections({ path })` 支持定向断开（默认值为 `REMOTE_STREAM_MUX_PATH`）；
+    空 path 不做任何事，返回实际断开条数。
+  - 已升级的 socket（half-open）在对端 FIN 时主动 `destroy`，避免跟踪表残留“假活”连接；
+    `stop()` 主动断开本代理上的全部连接（含 Upgrade）后再 `close()`，避免重建运行时卡住。
+- **0.2.3**：保存「组件 → 允许手机重启主机」后主动断开 App 的 Upgrade/WS 连接（隧道不重建），
+  让 App 的 ws-close 自动恢复立即重载页面并重新拉 status，顶栏 ⏻ 无需退出重进即可出现/消失。
+  （0.2.4 将其收窄为只断主实时通道。）
 - **0.2.2**（修复「允许手机重启主机 DSH」保存失败）
   - 历史配置迁移：`config.groupServiceUrl` 为空但有 `group.json` 注册信息时，启动/保存时
     自动用 `registration.serviceUrl` 回填并落盘（此前会因 `validateConfig` 报

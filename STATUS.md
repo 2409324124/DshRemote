@@ -8,9 +8,9 @@
 | 组件 | 版本 | 状态 |
 |---|---|---|
 | relay | **0.3.0**（镜像 `dsh-remote-relay:0.3.0-group`） | 只保留群体版：控制面 WSS + 注册 API + 部署方后台 + 边缘 TLS/鉴权/隧道 |
-| host-plugin | **0.2.3** | 只保留群体版：注册/隧道/loopback 明文代理（HTTP+WS）/群体配对/设置 UI；推送已删除；**远程重启主机恢复为可选组件（默认关闭）** |
+| host-plugin | **0.2.4** | 只保留群体版：注册/隧道/loopback 明文代理（HTTP+WS）/群体配对/设置 UI；推送已删除；**远程重启主机恢复为可选组件（默认关闭）** |
 | protocol | **0.2.0** | 只保留群体版协议常量/QR v2/帧/签名校验 |
-| App | **0.1.4（iOS build 10 / Android versionCode 10）** | 只有群体 token 模式；mTLS/推送/通知 UI 已删除；**App 锁=全局冷启动 + 单连接可选**，**远程重启主机 UI 已恢复**；待真机验收 |
+| App | **0.1.5（iOS build 11 / Android versionCode 11）** | 只有群体 token 模式；mTLS/推送/通知 UI 已删除；**App 锁=全局冷启动 + 单连接可选**，**远程重启主机 UI 已恢复**；待真机验收 |
 
 ## 验收状态
 
