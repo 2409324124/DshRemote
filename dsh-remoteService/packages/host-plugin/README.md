@@ -2,8 +2,10 @@
 
 > 许可证：**AGPL-3.0-or-later**（完整文本见根目录 [`LICENSE`](../../../LICENSE)）。
 >
-> 版本 **0.2.1**：本插件只保留群体服务版（A 模式）主机能力（classic/单体版的 mTLS、主机证书、
+> 版本 **0.2.2**：本插件只保留群体服务版（A 模式）主机能力（classic/单体版的 mTLS、主机证书、
 > 自托管推送已剥离）；**「重启主机 DSH」作为可关闭的「组件」在群体版恢复**（默认关闭）。
+> 0.2.2 修复「组件开关保存失败」：历史配置缺 `groupServiceUrl` 时自动从 `group.json` 回填，
+> 且纯状态字段（如 `restartHostEnabled`）保存不再重建隧道。
 > 旧版配置字段会被忽略，升级后需要重新注册一次。
 
 运行在 **DSH 主机** 上的远程访问插件，提供：
@@ -96,6 +98,8 @@ classic 配置字段（`relayUrl` / `relayDomain` / `hostId` / `hostToken` / `pu
    `~/.dsh/remote-access/device-ca`）与 `push-tokens.json`（可选，插件不再读取）；
 3. 旧手机 App 的 mTLS 连接不再可用，需用群体版 App 重新扫码配对。
 4. 「允许手机重启主机 DSH」已迁移到「设置 → 远程访问 → 组件」；默认仍为关闭，需要时再打开。
+5. 0.2.2 起，若配置里缺 `groupServiceUrl` 但 `group.json` 有注册信息，启动/保存时会自动回填
+   （历史配置迁移；不需要重新填服务地址或重新注册）。
 
 ---
 
@@ -166,7 +170,7 @@ Host 半注册在 DSH 本机 webServer：
     "domain": "h_ab12cd34.relay.example.com",
     "auth": "token",
     "relayConnected": true,
-    "version": "0.2.1",
+    "version": "0.2.2",
     "restart": { "enabled": false },
     "devices": { "total": 1, "active": 1 }
   }
@@ -263,3 +267,26 @@ Host 半注册在 DSH 本机 webServer：
 - [群体服务设计（A 模式）](../../../docs/group-service-design.zh.md)
 - [服务器 / relay 部署](../../../server/README.md)
 - [根目录 README](../../../README.md)
+
+---
+
+## 10. 变更记录
+
+- **0.2.2**（修复「允许手机重启主机 DSH」保存失败）
+  - 历史配置迁移：`config.groupServiceUrl` 为空但有 `group.json` 注册信息时，启动/保存时
+    自动用 `registration.serviceUrl` 回填并落盘（此前会因 `validateConfig` 报
+    「groupServiceUrl（服务地址）未配置」，导致任何保存都被 admin 拒绝为 400 invalid-config，
+    隧道也无法重建）。
+  - 配置保存按需重建运行时：只有 `enabled` / `groupServiceUrl` / `groupInviteCode` /
+    `hostName` / `groupPlainPort` / `groupInsecure` / `requireApproval` / `denyPrefixes` /
+    `maxRequestBytes` 变化才重建 `GroupHostRuntime`；`restartHostEnabled` 等纯状态字段
+    只持久化，保存立即返回、隧道不重连。
+  - 非运行时字段的保存不再返回历史遗留校验错误（`updateConfig` 返回 `applied` 标记，
+    admin 只在真正重建运行时失败时返回 400）。
+  - 停止 loopback 代理时主动断开残留 keep-alive/活跃连接，避免重建等待连接自然结束造成的
+    「保存很慢/超时」。
+  - 客户端保存失败 toast 带上服务端 `error.message` 与 `error.code`（如 `invalid-config`）。
+- **0.2.1**：群体版恢复「重启主机 DSH」可关闭组件（`restartHostEnabled`，默认关闭）、
+  cookie/Bearer 等价鉴权、`GET /__dsh_remote/status` 返回 `restart.enabled`、
+  `POST /__dsh_remote/restart`（202/401/405/501 + 审计）。
+- **0.2.0**：群体服务版（A 模式）主机能力（注册/隧道/loopback 明文代理/群体配对）。
