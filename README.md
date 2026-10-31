@@ -1,187 +1,87 @@
-# DSH Remote
+# DSH Remote · 群体服务版（A 模式）
 
-给 **DeepSeek Harness (DSH)** 增加手机远程访问能力的自托管方案：
+给 **DeepSeek Harness (DSH)** 增加「手机远程访问」能力的**群体服务版**：任何人可以自建一个
+relay，邀约一小群朋友/同事把各自的 DSH 主机接入，用手机 App 扫码后远程访问自己的 DSH。
 
-- **iPhone/Android App**：扫码配对，用设备证书（Secure Enclave / AndroidKeyStore）通过 mTLS 访问主机。
-- **主机插件**：跑在 DSH 主机上，负责配对、证书、设备管理和到本机 DSH 的反向代理。
-- **自托管 relay**：跑在公网服务器上，只做 TLS 盲转发；看不到明文，也不持有主机私钥。
+> **本分支（`feat/group-service`）是独立产品线，只包含群体服务功能**：
+> relay 终止手机 TLS（A 模式）、设备密钥 + 短时 token 鉴权、邀请码自助注册、部署方后台。
+> 分支上**不再包含** `main` 的 B2 盲中继 + 设备 mTLS（single-host/单体版）功能、主机 APNs 推送、
+> mTLS 证书管理等经典能力；两套形态的协议/配置/App 均不互通。
 
-> 设计目标：**不 fork DSH**、不把 DSH Web 直接暴露公网、支持自建域名/自建服务端。
-
----
-
-## 群体服务版（实验分支 `feat/group-service`）
-
-> **本分支不是 `main` 的生产形态。** 它给「任何人可自行部署、邀约小范围群体使用」的群体服务
-> 形态；`main` 的 B2 盲中继 + 设备 mTLS 形态保持不变。完整设计与决策记录见
-> **[docs/group-service-design.zh.md](docs/group-service-design.zh.md)**。
-
-**与 `main` 的本质差异**（均为项目所有者 2026-10-27 明确拍板）：
-
-| 维度 | `main`（B2 盲中继） | 本分支（A 模式群体版） |
-|---|---|---|
-| TLS 终止点 | 主机终止（relay 只按 SNI 透传） | **relay/服务端终止**（通配证书），主机只做出站隧道 |
-| 设备身份 | 设备 mTLS 客户端证书（主机校验） | **配对注册的设备密钥 + 短时 token**（relay 边缘校验 + 主机验签断言） |
-| 推送 | 主机直连 APNs（本机持有 `.p8`） | **服务端统一推送**（自建 App 直连 APNs / 官方 TestFlight 版走官方 hub） |
-| 主机开通 | 手填 hostId / token / 证书路径 | 邀请码自助注册，服务端分配 hostId、下发端口，证书/凭据全自动 |
-| 主机配置面 | 中继地址 + 域名 + TLS 路径等多字段 | 单一「服务地址」+ 邀请码 |
-
-**风险（使用/部署前必须知道）**：
-
-- **部署方可见明文**：A 模式下服务端终止 TLS，部署方（自行部署的人或服务提供商）能看到会话
-  内容与元数据，**风险与责任由部署方承担**；部署文档与 App 内必须明示。用 TestFlight 版时，
-  推送还会经过官方 hub（默认只发通用文案）。
-- **token 被窃 = 访问权**：已用「设备密钥 + 15–30 分钟短时 token + 主机设备表撤销」双重兜底，
-  但不等价于不可导出私钥的 mTLS。
-- **relay 被攻破可冒充设备**：A 模式下 relay 是身份权威，必须当作可信方。`main` 的 B2 不存在
-  这一假设。
-- **实验性**：协议（QR v2）、配置、API 都会变；**不要用于生产 / 公开服务**，仅限小范围、
-  邀请制、可信群体。
-- **与 `main` 不互通**：配对协议、认证方式、配置项均不同，两套部署不要混用。
-- **合规责任**：部署方自行承担内容、隐私与当地法规责任；须向群成员告知「运营方可看到会话内容」。
-
-**分支规划**：P0 设计文档（本提交）→ P1 relay 终止 TLS + 出站隧道 + 注册/邀请 + token 鉴权 +
-配对 POC → P2 服务端推送 → P3 分发（自建 App 构建 / TestFlight）与加固验收。本分支的
-`AGENTS.md` 已按上述取舍调整（本地约定、不入库）；`main` 的约束不变。
-
----
-
-## 架构
+## 组成
 
 ```
-┌──────────────┐        mTLS 客户端证书         ┌─────────────────────┐
-│  手机 App     │ ─────────────────────────────► │  nginx / relay:443   │
-│  WebView     │   https://<hostId>.<domain>    │  TLS 盲透传（SNI）    │
-└──────────────┘                                 └──────────┬──────────┘
-                                                            │ TLS 原样转发
-                                                            ▼
-                                                 ┌─────────────────────┐
-                                                 │  主机插件（DSH 主机） │
-                                                 │  终止 TLS + 校验设备  │
-                                                 │  反代到 127.0.0.1 DSH │
-                                                 └─────────────────────┘
-        ▲
-        │ wss://relay:8443（控制面）
-        └──────────── 主机插件 ↔ relay
+┌──────────────┐   https://<hostId>.<relayDomain>:<mobilePort>   ┌────────────────────────┐
+│  手机 App     │ ──────────────────────────────────────────────► │  relay（部署方 VPS）     │
+│  (token 鉴权) │   挑战 → 设备密钥签名 → 短时 token                │  边缘 TLS（通配证书）    │
+└──────────────┘                                                 │  鉴权 + 反向隧道         │
+        ▲                                                        └───────────┬────────────┘
+        │ wss://<relayDomain>:<publicControlPort>（主机出站隧道）              │ 隧道
+        └───────────────────────────────  主机插件（DSH 主机） ◄──────────────┘
+                                           反代到 127.0.0.1 的 DSH Web
 ```
 
-- 手机拿到 `dshremote://pair?...` 二维码后配对，获得设备证书。
-- App 用证书访问 `<hostId>.<relayDomain>`，主机插件校验后反代到本机 DSH。
-- relay 只按 SNI 转发 TLS 字节；主机子域证书和私钥只在主机。
+- **App**：扫码配对（QR v2，`auth=token`）→ 用 Secure Enclave / Android Keystore 里的 P-256
+  设备密钥对 relay challenge 签名 → 换 15 分钟短时 token → `__Host-dsh_session` cookie 访问自己的主机。
+- **主机插件**：跑在 DSH 主机上，负责群体版配对、注册/刷新、出站 WSS 隧道、loopback 明文代理
+  （HTTP + WebSocket 升级）到本机 DSH；默认拒绝外网入站。
+- **relay**：部署方自建，终止手机 TLS（需要 `*.relayDomain` 通配证书），负责设备会话鉴权、
+  主机隧道、邀请码注册、部署方后台。
 
----
+## 风险与边界（部署/使用前必读）
+
+- **部署方可见明文**：A 模式下 relay 终止手机 TLS，部署方（自己部署的人或服务提供商）能看到
+  会话内容与元数据；风险与责任由部署方承担。部署文档与 App 内均有明示。
+- **设备身份**：配对注册的设备公钥 + 短时 token（15 分钟、native 续期）+ 主机设备表撤销；
+  token 泄露 = 该设备在有效期内可访问，不等价于「私钥不可导出的 mTLS」。
+- **relay 是信任方**：A 模式下 relay 是身份权威，必须把它当作可信方；不要部署在不信任的服务器上。
+- **仅限小范围、邀请制、可信群体**；协议、配置与 API 仍会演进，不要用于公开服务。
+- DSH Web 始终只监听 `127.0.0.1`；不 fork DSH、不用 `--trusted-host` 旁路。
+- 本分支**不包含**主机本机 APNs 推送；推送后续按设计文档走服务端统一通道。
+
+完整设计与安全决策：[docs/group-service-design.zh.md](docs/group-service-design.zh.md)。
 
 ## 从这里开始
 
 | 我想… | 去这里 |
 |---|---|
-| 部署公网 relay + nginx + 证书 | **[server/README.md](server/README.md)** |
-| 在 DSH 主机安装/配置远程访问插件 | **[dsh-remoteService/packages/host-plugin/README.md](dsh-remoteService/packages/host-plugin/README.md)** |
-| 构建/运行手机 App | **[dsh-remoteApp/README.md](dsh-remoteApp/README.md)** |
-| 了解服务端 monorepo / relay 协议 / 管理 API | **[dsh-remoteService/README.md](dsh-remoteService/README.md)** |
-| 看完整部署细节（DNS-01、acme.sh、主机证书、运维） | **[dsh-remoteService/docs/DEPLOY.md](dsh-remoteService/docs/DEPLOY.md)** |
-| 看方案评估、威胁模型、Codex/Happy 对比 | **[docs/remote-access-evaluation.zh.md](docs/remote-access-evaluation.zh.md)** |
-| 看 POC 验收记录/截图 | **[dsh-remoteService/docs/POC-REPORT.md](dsh-remoteService/docs/POC-REPORT.md)**、[STATUS.md](STATUS.md) |
-| 看当前真机/构建状态 | **[STATUS.md](STATUS.md)** |
-| 看真实部署踩坑与排错 | **[server/README.md §9 常见坑](server/README.md#9-常见坑与排错实战)** |
-| 看手机端「载入历史很久/失败 + 画面反复跳」的根因与修复 | **[docs/diagnostics/00-root-cause.md](docs/diagnostics/00-root-cause.md)** |
-| 看手机端「右侧栏打不开 / 展开按钮消失」的根因与修复 | **[docs/diagnostics/05-mobile-right-panel.md](docs/diagnostics/05-mobile-right-panel.md)** |
-| 看手机端「设置页太挤」的全屏化 + 分区抽屉修复 | **[docs/diagnostics/06-mobile-settings-drawer.md](docs/diagnostics/06-mobile-settings-drawer.md)** |
-| 看手机端「查询用量/充值/意见反馈点击没反应」的外链修复 | **[docs/diagnostics/07-mobile-external-links.md](docs/diagnostics/07-mobile-external-links.md)** |
-| 看 Windows 主机无 openssl 时 EC 设备配对失败的根因与修复 | **[docs/diagnostics/08-host-ec-csr-windows.md](docs/diagnostics/08-host-ec-csr-windows.md)** |
-| 看手机端「打开大会话要等几秒」的历史分片拉取（首屏小窗口 + 按需翻页） | **[docs/diagnostics/09-mobile-history-slicing.md](docs/diagnostics/09-mobile-history-slicing.md)** |
-| 看手机 App 隐藏「在主机本机打开」入口 + 远程「重启主机 DSH」的设计与安全说明 | **[docs/diagnostics/10-mobile-host-actions.md](docs/diagnostics/10-mobile-host-actions.md)** |
-
-### 服务器如何配置（摘要）
-
-1. 域名：`relay.example.com` 和 `*.relay.example.com` 都解析到 VPS。
-2. 证书：
-   - relay 控制面证书（`relay.example.com`）放在服务器 `server/data/certs/`；
-   - 主机子域证书（`<hostId>.relay.example.com`）在 **DSH 主机** 上签发，填到插件设置里。
-3. `server/docker-compose.yml` 启动 relay；已有宿主机 nginx 时用 `server/nginx/host-nginx-stream.conf` 做 443/8443 的 **L4 TCP 透传**（不要做 HTTPS 终止）。
-4. relay 端 `token create` 生成主机 token，填到主机插件。
-5. 手机 App 扫码配对，访问 `https://<hostId>.relay.example.com/`。
-
-完整步骤、nginx 配置、Docker 端口、排障与安全清单：[**server/README.md**](server/README.md)。
-
----
+| 部署 relay（证书、端口、nginx、后台、邀请码） | [server/README.md](server/README.md) |
+| 在 DSH 主机安装/配置群体服务插件 | [dsh-remoteService/packages/host-plugin/README.md](dsh-remoteService/packages/host-plugin/README.md) |
+| 构建/运行手机 App | [dsh-remoteApp/README.md](dsh-remoteApp/README.md) |
+| 看服务端 monorepo（protocol/relay/host-plugin） | [dsh-remoteService/README.md](dsh-remoteService/README.md) |
+| 看落地踩坑与根因记录 | [docs/diagnostics/12-group-service-issues.md](docs/diagnostics/12-group-service-issues.md) |
+| 看当前状态与验收记录 | [STATUS.md](STATUS.md) |
 
 ## 仓库结构
 
 ```
 DshRemote/
-├── server/                     # 公网服务器：relay compose + nginx 透传配置
+├── server/                     # 部署方 VPS：群体版 relay compose + group nginx 配置
 ├── dsh-remoteService/          # 服务端 monorepo
-│   ├── packages/protocol/      #   配对 URI/SAS、relay 控制协议、二进制帧、管理 API 常量
-│   ├── packages/host-plugin/   #   DSH 主机插件（Host 半 + Client 半）
-│   ├── packages/relay/         #   自托管盲中继（443 透传 / 8443 控制面 / token CLI）
-│   ├── scripts/                #   DNS-01 主机证书、部署自检
-│   └── docs/                   #   DEPLOY / ADMIN-API / POC-REPORT
-├── dsh-remoteApp/              # Expo / React Native App（iOS 优先，含原生 mTLS 模块）
-├── docs/                       # 方案评估与设计
-├── mockups/                    # UI / 架构稿 / 真机截图
-├── research/                   # Codex/DSH 预研材料
-└── STATUS.md                   # 当前实施状态与剩余验收项
+│   ├── packages/protocol/      #   群体版协议常量 / QR v2 / 帧 / 签名校验
+│   ├── packages/host-plugin/   #   DSH 主机插件（群体版注册/隧道/明文代理/配对）
+│   └── packages/relay/         #   群体版 relay（边缘 TLS + 注册 API + 后台 + 控制面 WSS）
+├── dsh-remoteApp/              # Expo / React Native App（群体版 token 模式，iOS 优先）
+├── docs/                       # 设计文档与排障记录
+└── STATUS.md                   # 当前状态与验收记录
 ```
-
----
-
-## 两分钟跑通（开发/POC）
-
-```bash
-# 1) 服务端依赖 + 单元/端到端 POC（需要 dsh CLI）
-cd dsh-remoteService
-npm install
-npm test
-node poc/run-poc.js
-
-# 2) 服务器编排（VPS）
-cd ../server
-cp .env.example .env        # 改 RELAY_DOMAIN
-docker compose up -d relay
-
-# 3) App
-cd ../dsh-remoteApp
-npm install
-npx expo prebuild --clean
-npx expo run:ios --device   # 或 run:android
-```
-
-生产证书、nginx、DNS 和 main 机插件配置不要跳过：
-先读 [server/README.md](server/README.md) 与 [host-plugin README](dsh-remoteService/packages/host-plugin/README.md)。
-
----
-
-## 安全模型（摘要）
-
-- **设备身份 = mTLS 客户端证书**，私钥只在 Secure Enclave / AndroidKeyStore。
-- **relay 是盲管道**：只按 SNI 转发 TLS，不持有主机子域证书、看不到明文。
-- **主机插件终止主机 TLS**，校验设备证书后反代到 `127.0.0.1` 的 DSH Web。
-- DSH Web 不直接暴露公网，不关闭认证，不使用 `--trusted-host`。
-- 配对密钥一次性、短时有效；设备可撤销；管理 API 只允许本机已认证浏览器。
-- 不要用 nginx 对 relay 域名做 HTTPS 终止/HTTP 反代；必须 L4 透传（原因见 server/README）。
-
----
 
 ## 开发与测试
 
 ```bash
 cd dsh-remoteService
+npm install
 npm test
 npm run validate:artifacts
-node poc/run-poc.js
-npm run poc:docker
 
 cd ../dsh-remoteApp
 npx tsc --noEmit
 npm run check:native
-npm run check:ios-env
+npm run check:shell
 ```
 
-> 当前 App 已包含原生 mTLS WebView、配对、设备管理、推送注册、设置页（通知/缓存/版本）和手机侧栏/右栏/设置页适配；
-> 真机签名/构建步骤见 [dsh-remoteApp/README.md](dsh-remoteApp/README.md)。
-
----
+真机构建/验收步骤见 [dsh-remoteApp/README.md](dsh-remoteApp/README.md) 与
+[dsh-remoteApp/docs/ACCEPTANCE.md](dsh-remoteApp/docs/ACCEPTANCE.md)。
 
 ## 许可
 
@@ -189,8 +89,8 @@ npm run check:ios-env
 
 - 完整协议文本：[LICENSE](LICENSE)
 - 版权声明：[COPYRIGHT](COPYRIGHT)
-- 你可以运行、修改、分发、商业使用本软件。
-- 如果你修改了本软件并通过网络向用户提供服务，必须按 AGPL §13 向这些用户提供修改版的完整 Corresponding Source。
+- 你可以运行、修改、分发、商业使用本软件；若修改后通过网络向用户提供服务，须按 AGPL §13
+  向这些用户提供修改版的完整 Corresponding Source。
 - 分发衍生作品时，必须继续使用 AGPL-3.0-or-later。
 - App Store 等平台分发可能和 AGPL 的再分发要求存在冲突；若要上架，请单独评估或采用商业双许可。
 

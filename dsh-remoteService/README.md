@@ -1,63 +1,52 @@
-# dsh-remoteService（方案 B2 · 服务端 monorepo）
-
+# dsh-remoteService（群体服务版 · 服务端 monorepo）
 
 > 许可证：**AGPL-3.0-or-later**（完整文本见根目录 [`LICENSE`](../LICENSE)）。
-DSH 远程访问的服务端实现：**自托管盲中继 + 主机插件（mTLS 反向代理）+ 共享协议**。
-配套手机 App 在 [`../dsh-remoteApp`](../dsh-remoteApp)；公网服务器编排在 [`../server`](../server)；评估与设计见 [`../docs/remote-access-evaluation.zh.md`](../docs/remote-access-evaluation.zh.md)。
+
+群体服务版（A 模式）的服务端实现：**relay（终止手机 TLS + 边缘鉴权 + 主机隧道）+ 主机插件
+（DSH 主机，出站隧道 + loopback 明文代理）+ 共享协议**。本分支不包含 classic 单机版
+（mTLS 盲中继）功能。
+
+配套手机 App：[`../dsh-remoteApp`](../dsh-remoteApp)；公网部署：[`../server`](../server)；
+设计与决策：[`../docs/group-service-design.zh.md`](../docs/group-service-design.zh.md)。
+
+## 包结构
+
+```
+packages/protocol/     # 群体版协议：QR v2、边缘鉴权常量、控制消息、二进制流帧、
+                       # challenge/token 签名与校验、cookie 解析
+packages/host-plugin/  # DSH 主机插件：群体注册/刷新、控制面 WSS、设备同步、
+                       # loopback 明文代理（HTTP + WebSocket upgrade）、群体配对、桌面设置 UI
+packages/relay/        # 群体版 relay：控制面 WSS、注册 API、部署方后台 /__admin、
+                       # 边缘 TLS（通配证书）、challenge→token 鉴权、主机隧道
+```
 
 ## 快速导航
 
 | 内容 | 文档 |
 |---|---|
-| 公网 relay + nginx 部署 | [`../server/README.md`](../server/README.md) |
-| 主机插件安装与配置 | [`packages/host-plugin/README.md`](packages/host-plugin/README.md) |
+| 部署 relay（证书/端口/nginx/后台/邀请码） | [`../server/README.md`](../server/README.md) |
+| 主机插件安装/配置 | [`packages/host-plugin/README.md`](packages/host-plugin/README.md) |
+| relay 配置与运维 | [`packages/relay/README.md`](packages/relay/README.md) |
 | 手机 App | [`../dsh-remoteApp/README.md`](../dsh-remoteApp/README.md) |
-| 完整部署细节（DNS-01 / 证书 / 运维） | [`docs/DEPLOY.md`](docs/DEPLOY.md) |
-| 管理 API 契约 | [`docs/ADMIN-API.md`](docs/ADMIN-API.md) |
-| 根目录总览 | [`../README.md`](../README.md) |
+| 落地问题与根因记录 | [`../docs/diagnostics/12-group-service-issues.md`](../docs/diagnostics/12-group-service-issues.md) |
 
-```
-packages/protocol/     # 配对 URI/SAS/12 位码、relay 控制消息、二进制流帧、管理 API 常量
-packages/host-plugin/  # DSH 插件：Host 半（身份/设备 CA/配对/mTLS/反代/relay 连接器/审计/证书热加载）
-                       #          Client 半（sidebar.footer.action 入口 / 配对弹窗 / 设置页）
-packages/relay/        # 自托管盲中继：443 TLS 透传、80 跳转/healthz、8443 控制面、token CLI、Docker
-poc/                   # 本地端到端 POC（真实 dsh web + relay + mTLS）
-docs/                  # ADMIN-API.md / DEPLOY.md / POC-REPORT.md
-```
-
-## 状态（2026-10-19）
-
-| 项 | 状态 |
-|---|---|
-| 协议 / host 插件 / relay / 客户端 UI / 管理 API | ✅ 已实现 |
-| 单元+集成测试 `npm test` | ✅ 94 tests / 0 fail（含 APNs、会话摘要、后台恢复重连与通知跳转） |
-| 端到端 POC `node poc/run-poc.js`（配对→mTLS→relay→DSH UI/WS） | ✅ PASS |
-| 真实 DSH 内入口 & 配对弹窗（截图验证） | ✅ PASS（`../mockups/live-pairing.png`） |
-| B2 生产部署文档（域名/DNS-01/acme.sh/运维/安全红线） | ✅ `docs/DEPLOY.md` |
-| WebView mTLS | ✅ macOS WKWebView 已验证；⏳ iOS 真机需 Xcode |
-| 推送（自托管 APNs，会话摘要 + 等待回答） | ✅ 主机直连 Apple（.p8 + device token；标题/正文取会话摘要；`ask_user_question` 等待作答时推送会话名 + 「正在等待你的回答」）；旧 relay→Expo 通道可选 |
-| 原生 CSR / Android 编译 | ⏳ 下一里程碑 |
-
-## 开发与验收
+## 开发与测试
 
 ```bash
 cd dsh-remoteService
 npm install
-npm test                 # 58 tests
-node poc/run-poc.js      # 端到端 POC（需要 dsh CLI；使用独立临时 DSH_HOME，安全）
-npm run poc:docker       # Docker relay 端到端（需 docker/colima；含真实 host 插件 + mTLS）
-npm run validate:artifacts  # 部署产物静态校验（shell/compose/plist/JSON）
-npm run poc:deploy          # 部署自检脚本本地成功路径演练
-npm run bench            # relay 数据面吞吐/延迟基线
-npm run poc:webview      # macOS WKWebView 客户端证书 POC（无需 Xcode）
-npm run poc:csr          # Swift P-256 CSR → host 签发 → openssl 校验（无需 Xcode）
+npm test                    # 全部单元/集成测试
+npm run validate:artifacts  # 部署产物静态校验（shell/Node 语法、JSON、relay dev compose）
 ```
-
-POC 细节与已知限制见 [`docs/POC-REPORT.md`](docs/POC-REPORT.md)；生产部署见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 ## 安全边界（摘要）
 
-- 设备身份 = **mTLS 客户端证书**（私钥在 Secure Enclave/Keystore），不来自任何请求头/来源 IP。
-- relay 是盲管道：443 只转发 TLS 字节，不持有主机子域证书；B2 下连冒充服务器都做不到。
-- DSH 本机 Web 服务保持 `127.0.0.1`，不加 `--trusted-host`；插件剥离客户端头并注入本机 session cookie。
-- 配对一次性密钥 ≤120s + 桌面 SAS 确认；设备可撤销；配对/反代路径有限速与 deny list。
+- 设备身份只来自「配对注册的 P-256 设备公钥 + relay 签发的短时 token（15 分钟，native 续期）」；
+  主机逐请求复验 token 并检查设备在册。
+- relay 在 A 模式下终止手机 TLS（部署方可见明文，责任由部署方承担），是身份信任方；
+  请部署在自己信任的服务器上。
+- DSH Web 始终保持 `127.0.0.1` 回环，不暴露公网、不用 `--trusted-host`。
+- 主机明文代理保留与 classic 一致的 deny list（`/connect`、`/oauth`、`/open-in-app*`、
+  `/api/remote-access`、`/__dsh_remote/*` 等）。
+- 撤销双保险：主机设备表删除 + relay 会话失效；控制连接断链立即生效。
+- 邀请制注册（邀请码 + 限速 + 配额），不开放公开注册。
