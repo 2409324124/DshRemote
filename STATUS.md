@@ -10,15 +10,15 @@
 | relay | **0.3.0**（镜像 `dsh-remote-relay:0.3.0-group`） | 只保留群体版：控制面 WSS + 注册 API + 部署方后台 + 边缘 TLS/鉴权/隧道 |
 | host-plugin | **0.2.4** | 只保留群体版：注册/隧道/loopback 明文代理（HTTP+WS）/群体配对/设置 UI；推送已删除；**远程重启主机恢复为可选组件（默认关闭）** |
 | protocol | **0.2.0** | 只保留群体版协议常量/QR v2/帧/签名校验 |
-| App | **0.1.5（iOS build 11 / Android versionCode 11）** | 只有群体 token 模式；mTLS/推送/通知 UI 已删除；**App 锁=全局冷启动 + 单连接可选**，**远程重启主机 UI 已恢复**；待真机验收 |
+| App | **0.1.5（iOS build 11 / Android versionCode 11）** | 只有群体 token 模式；mTLS/推送/通知 UI 已删除；**App 锁=全局冷启动 + 单连接可选**，**远程重启主机 UI 已恢复**；✅ 2026-11-01 用户真机验收通过 |
 
 ## 验收状态
 
-- 群体服务版曾于 **2026-11-01** 用 App 0.1.0 (build 6) + host-plugin 0.1.23 + relay 0.2.13
-  完成真机验收（配对→立刻进入无 401→手机布局/会话/实时消息正常；nginx 前置链路重配对正常）。
-- **本轮「剥离 classic」重构后**：App 0.1.1 (build 7) 已构建并安装到真机，**待用户验收**
-  （见 [`dsh-remoteApp/docs/ACCEPTANCE.md`](dsh-remoteApp/docs/ACCEPTANCE.md)）；
-  验收通过后再提交 App 改动。
+- 群体服务版于 **2026-11-01** 完成真机验收：App **0.1.5 (build 11)** + host-plugin **0.2.4** +
+  relay **0.3.0**（配对/进入/手机布局/会话与实时消息正常；App 锁=全局冷启动+单连接可选；
+  「重启主机 DSH」组件与保存后 App 即时刷新正常；前后台无任何推送）。
+- 首轮群体版（App 0.1.0 build 6 + host-plugin 0.1.23 + relay 0.2.13）同于 2026-11-01 验收通过。
+- 验收记录：[`dsh-remoteApp/docs/ACCEPTANCE.md`](dsh-remoteApp/docs/ACCEPTANCE.md)。
 
 ## 本轮（2026-11-01）剥离内容
 

@@ -2,176 +2,154 @@
 
 
 > 许可证：**AGPL-3.0-or-later**（完整文本见根目录 [`LICENSE`](../LICENSE)）。
-DSH 远程访问的手机端外壳：**Expo / React Native (TypeScript)**，iOS 优先、Android 同步搭骨架。
-
+> 手机端外壳：**Expo / React Native (TypeScript)**，iOS 优先、Android 同步搭骨架。
+>
 > 相关文档：
 > [根目录总览](../README.md) ·
 > [服务器部署](../server/README.md) ·
 > [主机插件](../dsh-remoteService/packages/host-plugin/README.md) ·
 > [服务端 monorepo](../dsh-remoteService/README.md)
 
-它做四件事：
+> **本 App 只有群体服务版（A 模式 / token 鉴权）。**
+> 原先 classic/单体版的设备 mTLS 证书模式（CSR、PKCS#12 证书导入、原生 mTLS WebView、
+> 证书诊断、APNs 推送 / 应用内通知）已**全部从 App 删除**，不会回退；
+> 「重启主机 DSH」作为群体版可选组件保留（host 端开启后 App 顶栏出现 ⏻）。
 
-1. **扫码配对**：扫主机桌面端生成的 `dshremote://pair?...` 二维码（或手动粘贴），本地校验主机地址、完整 SHA-256 指纹、有效期。
-2. **安全存储**：`expo-secure-store`（iOS Keychain / Android EncryptedSharedPreferences）保存 host / deviceId / 证书 PEM；**设备私钥永不进入 JS**。
-3. **加载 DSH Web UI**：`https://<hostId>.<relayDomain>/?dsh_mobile=1`，顶部状态条显示主机名 + 状态/主机 ID，提供刷新与「重启主机」（二次确认后经 mTLS 请求主机重启 DSH 客户端，探测到主机恢复后自动重新加载页面）；外部链接（`target=_blank` / `window.open`，如查询用量/充值/意见反馈）在 App 内嵌浏览器打开（可一键切系统浏览器）；底部连接信息条只在 Debug 构建显示（Release 让位给主界面）。
-4. **mTLS 客户端证书**：自定义原生 WebView（iOS `WKNavigationDelegate.didReceive challenge` + `SecIdentity`；Android `WebViewClient.onReceivedClientCertRequest` + Keystore）在 TLS 握手中出示设备证书。
+它做这些事：
 
-接口契约见 [`../dsh-remoteService/docs/ADMIN-API.md`](../dsh-remoteService/docs/ADMIN-API.md)，设计依据见
-[`../docs/remote-access-evaluation.zh.md`](../docs/remote-access-evaluation.zh.md) §4.3（配对）/ §4.4（密钥层级）/ §4.7（App 设计）。
+1. **扫码配对**：扫主机「远程访问」生成的 `dshremote://pair?v=2&...&auth=token` 二维码
+   （或手动粘贴），本地严格校验主机地址、完整 SHA-256 指纹、端口、有效期。
+2. **安全存储**：`expo-secure-store`（iOS Keychain / Android EncryptedSharedPreferences）保存
+   主机元数据、设备 ID、设备密钥 label；**设备私钥只在 Secure Enclave / AndroidKeyStore**，
+   永不进入 JS；会话 token **不落盘**。
+3. **加载 DSH Web UI**：`https://<hostId>.<relayDomain>:<port>/?dsh_mobile=1`。
+   relay 在边缘终止手机 TLS、按短时 token 校验后反代到主机；外部链接（`target=_blank` /
+   `window.open`，如查询用量/充值/意见反馈）在 App 内嵌浏览器打开（可一键切系统浏览器）。
+4. **token 会话**：challenge → 原生 P-256 签名 → 短时 token（15–30 分钟）→
+   `__Host-dsh_session` cookie（host-only / Secure / SameSite=Strict）；进入主机、回前台、
+   每 30s native 续期，token 只在内存与 WebView cookie store。
+5. **App 锁**：全局开关在「设置」页，只负责**冷启动解锁**；如需某台主机在打开时也要求
+   Face ID / Touch ID，在「设备与安全」里为该主机单独开启「打开此连接时要求面容」
+   （仅在全局 App 锁开启时生效；进入主机后的同步/心跳/切会话不会要求）。
+
+接口契约（群体版）见 `dsh-remoteService/docs/group-service-design.zh.md` 与 relay README §10；
+本分支只保留群体版；classic/单体版的设备管理/证书/推送/重启接口已从服务端删除。
 
 ---
 
-## 当前状态（2026-10-26）
+## 当前状态（0.1.5 / 构建号 11）
 
 | 项 | 状态 |
 |---|---|
 | iOS Release 构建 / 真机安装 | ✅ 已完成（手动签名 + `devicectl`；无 dev-client/DevMenu） |
-| iOS 原生 mTLS WebView（Secure Enclave 设备证书） | ✅ 真机通过 |
-| 配对 / 设备证书 / 撤销 / 审计 / App 锁 | ✅ 已实现 |
-| Android 源码（mTLS WebView / CSR / Keystore） | ✅ 源码完成；⏳ 未在有 Android SDK 的环境编译 |
-| iOS 推送 | ✅ 自托管 APNs 直连（APNs device token + aps-environment；通知取会话标题+助手回复摘要；点击通知跳对应会话，2026-10-25 真机验证；App 锁屏时按系统通知显示）；Android FCM 未接入 |
-| 前台推送 | ✅ App 内通知卡片（默认不弹系统横幅，20s 自动消失；当前会话不弹卡片）；后台/锁屏仍是系统通知 |
-| 设置页 | ✅ 版本信息 / 应用内通知开关 / 通知权限 / 发送测试通知 / 清理 WebView 缓存 / 设备与安全入口 |
-| 手机布局（`?dsh_mobile=1`，注入手机壳） | ✅ 会话侧栏→左侧抽屉；窄屏右栏→全屏覆盖层；窄屏设置→全屏 + 分区菜单抽屉（左上返回退出设置）；外链→App 内嵌浏览器（`ExternalPageScreen`，可切系统浏览器）；窄屏隐藏 DSH 的「在主机本机打开」控件（open-in-app，只按稳定 `data-*` 属性隐藏控件本身、不整段隐藏插件槽位）（`src/lib/mobileWebShell.ts`、`src/screens/WebViewScreen.tsx`；`npm run check:shell` 无头 Chrome 回归） |
-| 主机列表管理 | ✅ 多主机列表；每台可单独删除本机记录（确认框，不进入配对流程）；主机改名自动同步；主机侧撤销设备后卡片显示警示并可删除（0.1.8，真机验证）；「设备与安全」页只保留单一「解除本机配对」入口（0.1.9） |
-| 配对默认设备名 | ✅ 使用系统本机设备名（`expo-device`；系统只给通用名时回退机型名），可自定义；不再写死「我的 iPhone」 |
-| 服务端 relay / 主机插件 | ✅ 见 `dsh-remoteService` 与 `server/` |
+| 群体版配对（v2 token + P-256 设备密钥 + SAS 确认） | ✅ 0.1.0 真机通过；0.1.1 剥离 classic 后**待用户复测** |
+| token 会话（challenge→签名→token→`__Host-` cookie、单飞/重试、404 设备失效提示） | ✅ 0.1.0 真机通过；0.1.1 **待复测** |
+| 主机列表 / 设备与安全 / 设置页（群体项） | ✅ 已实现；0.1.1 **待复测** |
+| 隧道 WebView（`react-native-webview` + 注入手机壳） | ✅ `npm run check:shell` 无头 Chrome 回归；真机 **待复测** |
+| ExternalPageScreen 内嵌浏览器 | ✅ 保留（群体版外链用） |
+| iOS/Android 原生模块 | ✅ 只保留群体版：`DSHMTLSGroupKeys.swift` / `DshMtlsGroupKeys.kt`（P-256 密钥/签名/cookie/缓存清理） |
+| APNs 推送 / 应用内通知 / 通知设置 | ❌ 已删除（群体版本机推送暂不实现；**不应再收到任何推送**） |
+| 「重启主机 DSH」 | ✅ 恢复为群体版可选组件（host-plugin ≥0.2.1；主机设置 → 远程访问 → 组件开启后 App 顶栏显示 ⏻） |
+| classic/单体 mTLS（CSR/证书/P12/原生 mTLS WebView/证书诊断） | ❌ 已删除 |
+| Android 构建 | ⏳ 源码只保留 group 能力；未在有 Android SDK 的环境编译 |
 
 > 原生构建需要 macOS + Xcode；本仓库不提交生成的 `ios/`/`android/` 目录和签名材料。
-> 0.1.8 起新增 `expo-device`（读取系统设备名）——升级安装包需要重新 `pod install` / 构建原生包，不能只换 JS bundle。
+> 改原生模块后必须重新 `expo prebuild` + `pod install` 再构建，不能只换 JS bundle。
 
 ## 目录结构
 
 ```
 dsh-remoteApp/
-├── App.tsx                        # 极简导航状态机：loading → pairing → webview ⇄ devices
+├── App.tsx                        # 极简导航状态机：loading → pairing → home ⇄ webview | devices | settings
 ├── index.ts                       # Expo 入口（registerRootComponent）
-├── app.json                       # name/scheme/bundle id/android package/plugins
+├── app.json                       # name/scheme/bundle id/android package/plugins/版本号
 ├── tsconfig.json                  # strict + noUncheckedIndexedAccess
 ├── package.json                   # Expo SDK 58（RN 0.88 / React 19）
 ├── src/
 │   ├── theme.ts                   # 颜色/间距/共享样式
 │   ├── lib/
-│   │   ├── protocol.ts            # 配对 URI 解析/校验、指纹展示、API 路径与信封类型（纯函数）
-│   │   ├── store.ts               # SecureStore 封装（连接记录 + 分块证书 PEM；web 无持久化回退）
-│   │   └── pairing.ts             # 可注入 PairingTransport 的配对流程骨架（CSR → /pair → 轮询 → 持久化）
+│   │   ├── protocol.ts            # v2 配对 URI 解析/校验、指纹展示、群体版 URL 与信封类型（纯函数）
+│   │   ├── group.ts               # 群体版配对 + token 会话（challenge→签名→token→cookie）
+│   │   ├── store.ts               # SecureStore 封装（只存群体版连接记录；classic 记录加载时丢弃）
+│   │   ├── appLock.ts             # App 锁（生物识别）
+│   │   ├── deviceName.ts          # 系统设备名 / 配对默认设备名
+│   │   └── mobileWebShell.ts      # 注入 DSH Web UI 的手机布局壳（字符串 JS）
 │   └── screens/
-│       ├── PairingScreen.tsx      # 相机扫码 + 手动粘贴 + 指纹/SAS/备用码 + 桌面确认等待
-│       ├── WebViewScreen.tsx      # 主界面：状态条 / 刷新 / 外链 / mTLS WebView 接入 TODO
-│       └── DevicesScreen.tsx      # 设备与安全：本地身份/证书状态、POC 证书导入、重新配对
-└── modules/dsh-mtls/              # 本地 Expo Module（POC，未编译）
+│       ├── PairingScreen.tsx      # 相机扫码 + 手动粘贴 + 指纹 + 桌面确认等待（SAS）
+│       ├── HomeScreen.tsx         # 已配对主机列表（打开/设备与安全/删除/配对新主机）
+│       ├── WebViewScreen.tsx      # 主界面：token 会话 + 隧道 WebView + 外链
+│       ├── DevicesScreen.tsx      # 设备与安全：主机信息/设备密钥 label/解除配对
+│       ├── SettingsScreen.tsx     # 版本 / 清理缓存 / App 锁 / 设备与安全入口
+│       ├── LockScreen.tsx         # App 锁
+│       └── ExternalPageScreen.tsx # 内嵌浏览器（外链）
+├── scripts/
+│   ├── check-native-sources.mjs   # 原生模块源码一致性检查（含 classic 文件必须已删除）
+│   └── check-injected-shell.mjs   # 注入手机壳的无头 Chrome 回归
+└── modules/dsh-mtls/              # 本地 Expo Module（模块名保留 DSHMTLS，内部只有 group 代码）
     ├── expo-module.config.json
-    ├── package.json
     ├── src/index.ts               # JS 桥（requireOptionalNativeModule，缺失时优雅降级）
     ├── ios/
     │   ├── DSHMTLS.podspec
-    │   ├── DSHMTLSModule.swift    # Module 定义：函数 + View 注册
-    │   ├── DSHMTLSIdentityStore.swift  # Keychain：SecPKCS12Import / 按 label 查 SecIdentity / 诊断
-    │   └── DSHMTLSWebView.swift   # WKWebView + 客户端证书挑战 + 导航事件
+    │   ├── DSHMTLSModule.swift    # Module 定义：group 函数 + setSessionCookie + clearWebCache
+    │   └── DSHMTLSGroupKeys.swift # Secure Enclave P-256 密钥生成/公钥导出/ECDSA 签名/删除
     └── android/
         ├── build.gradle
         └── src/main/java/com/dsh/remote/mtls/
-            ├── DshMtlsModule.kt       # Module 定义（函数 + View 注册）
-            ├── DshMtlsIdentityStore.kt # KeyChain / AndroidKeyStore 身份查找
-            ├── DshMtlsWebViewClient.kt # onReceivedClientCertRequest → request.proceed(...)
-            └── DshMtlsWebView.kt       # ExpoView 包 WebView + JS bridge + 事件
+            ├── DshMtlsModule.kt       # Module 定义（group 函数 + cookie + 缓存清理）
+            └── DshMtlsGroupKeys.kt    # AndroidKeyStore P-256 密钥/签名
 ```
 
 ---
 
 ## 前置要求
 
-- **macOS + 完整 Xcode**（App Store 安装，打开一次同意许可；`xcode-select -p` 应指向 `Xcode.app/Contents/Developer`，而不是 Command Line Tools）。
+- **macOS + 完整 Xcode**（App Store 安装，打开一次同意许可；`xcode-select -p` 应指向 `Xcode.app/Contents/Developer`）。
 - **CocoaPods**（`brew install cocoapods` 或 `sudo gem install cocoapods`）。
-- **Node.js ≥ 20**、npm ≥ 10（本 POC 用 Node v24.16.0 / npm 11 验证）。
-- **Apple Developer 账号**：真机安装需要签名；免费账号可签 7 天（推送/部分能力受限，POC 的 mTLS 不需要付费能力，但推送需要付费账号）。
-- **iPhone 运行 iOS 16.4+**（Expo SDK 58 / RN 0.88 的最低部署目标；本项目通过 `expo-build-properties` 固定为 16.4）。
-- **主机侧已经跑起来**：`dsh-remoteService` 的 relay + host plugin（提供 `/__dsh_remote/pair` 与 mTLS 隧道；接口见 ADMIN-API.md）。没有主机时只能验证 UI 与协议解析。
+- **Node.js ≥ 20**、npm ≥ 10。
+- **Apple Developer 账号**：真机安装需要签名（本 App 不再需要 APNs 能力）。
+- **iPhone 运行 iOS 16.4+**（Expo SDK 58 / RN 0.88 的最低部署目标，`expo-build-properties` 固定为 16.4）。
+- **主机侧已经跑起来**：`dsh-remoteService` 的 relay + host plugin，且主机在桌面 DSH
+  「远程访问」里开启了群体服务（生成 v2 token 配对二维码）。没有主机时只能验证 UI 与协议解析。
 
-> **Expo Go 不可用**：`modules/dsh-mtls` 是本地原生模块，Expo Go 不包含它；必须构建 **dev client**。代码在模块缺失时不会崩溃，只会显示"当前构建未链接 mTLS 原生模块"。
+> **Expo Go 不可用**：`modules/dsh-mtls` 是本地原生模块，Expo Go 不包含它；必须构建原生包。
+> 代码在模块缺失时不会崩溃，只会提示"当前构建未链接原生模块"。
 
 ---
 
-## 快速开始（iOS 真机）
+## 构建与安装（iOS 真机）
 
 ```bash
 cd dsh-remoteApp
 npm install                 # 已完成；锁文件见 package-lock.json
 
 # 1) 生成原生工程（ios/、android/ 由 config 生成，已加入 .gitignore）
-npx expo prebuild --clean
+npx expo prebuild -p ios --no-install
 
-# 2) 首次真机运行（会自动 pod install；需要已连接的 iPhone / 模拟器）
-npx expo run:ios --device
+# 2) 原生依赖（Pods）
+cd ios
+mkdir -p .pods-home .pods-cache
+CP_HOME_DIR="$PWD/.pods-home" CP_CACHE_DIR="$PWD/.pods-cache" pod install
+cd ..
 
-# 3) 之后日常开发只需启动 Metro + dev client
-npx expo start
-```
-
-首次签名配置（只需一次）：
-
-```bash
-open ios/*.xcworkspace     # 在 Xcode 中打开
-# 选择 target → Signing & Capabilities
-#   Team: 你的 Apple Developer Team
-#   Bundle Identifier: com.amesucre.dshremote（已与注册的 App ID 对齐）
-```
-
-> `bundleIdentifier` / `android.package` 已固定为 `com.amesucre.dshremote`。
-
-### 局域网（无线）安装到 iPhone（不插 USB）
-
-前提：iPhone 至少插过一次 USB 并在 Xcode → Window → Devices and Simulators 里勾选
-**Connect via network**；之后 CoreDevice 会通过同一局域网管理它（`Transport Type: localNetwork`）。
-本项目实测可行（Mac 有线 + iPhone Wi-Fi 同一网段，`devicectl install` 约 2 秒完成）。
-
-```bash
-# 0) 确认设备已被 CoreDevice 通过局域网发现
-xcrun devicectl list devices
-xcrun devicectl device info details --device <UDID> | grep -E "Transport Type|Developer Mode"
-
-# 1) 查签名材料（描述文件必须包含该设备 UDID；开发描述文件有有效期）
-security find-identity -v -p codesigning
-ls ~/Library/MobileDevice/Provisioning\ Profiles/
-
-# 2) 构建已签名的 Release（内嵌 JS bundle，不依赖 Metro）
-cd dsh-remoteApp
+# 3) Release 构建（手动签名参数按你本机替换；不要提交任何签名材料）
 xcodebuild -workspace ios/DSHRemote.xcworkspace -scheme DSHRemote -configuration Release \
-  -destination 'generic/platform=iOS' -derivedDataPath /tmp/dsh-ios-release \
+  -destination 'generic/platform=iOS' -derivedDataPath /tmp/dsh-ios-group \
   CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=<TEAM_ID> \
   PROVISIONING_PROFILE_SPECIFIER=<PROFILE_UUID> \
   CODE_SIGN_IDENTITY='Apple Development: <NAME> (<CERT_ID>)' build
 
-# 3) 局域网安装 + 启动（走 Wi-Fi，无需 USB）
-xcrun devicectl device install app --device <UDID> \
-  /tmp/dsh-ios-release/Build/Products/Release-iphoneos/DSHRemote.app
-xcrun devicectl device process launch --device <UDID> com.amesucre.dshremote
-
-# 4) 验证（可选）
-xcrun devicectl device info apps --device <UDID> --bundle-id com.amesucre.dshremote
-xcrun devicectl device capture screenshot --device <UDID> --destination /tmp/phone.png
+# 4) 安装 + 启动（USB 或已配对的局域网设备）
+xcrun devicectl device install app --device <IPHONE_UDID> \
+  /tmp/dsh-ios-group/Build/Products/Release-iphoneos/DSHRemote.app
+xcrun devicectl device process launch --device <IPHONE_UDID> <BUNDLE_ID>
 ```
 
-> 注意：
-> - Release 构建把 JS 打进 `main.jsbundle`（Hermes 字节码），手机端不需要 Metro/开发服务器。
-> - 改了 `app.json` 的 `version`/`buildNumber` 后，`xcodebuild` 实际读的是 prebuild 生成的
->   `ios/DSHRemote/Info.plist`；不重新 `expo prebuild` 的话要手动同步该文件，否则装上去仍显示旧版本号。
-> - 描述文件的**有效期与签名证书无关**：正常的开发描述文件 `TimeToLive` 是 **365 天**（证书也是约 1 年）。如果只有 7 天，通常是创建时选了某些短时效选项（例如门户里的「离线支持」选项），或当前生效的是免费个人团队（Personal Team）的资源。创建后、安装前先校验：
->   ```bash
->   security cms -D -i <描述文件>.mobileprovision | plutil -p - | grep -E '"Name"|"ExpirationDate"|"TimeToLive"'
->   # 正常应看到 TimeToLive => 365、ExpirationDate 约一年后
->   security cms -D -i <App>.app/embedded.mobileprovision | plutil -p - | grep -E '"ExpirationDate"|"TimeToLive"'
->   ```
->   描述文件过期后 App 会启动失败，需要重新签名安装（设备 UDID 不在描述文件里同理）。
-> - 同一 bundle id 覆盖安装会保留 App 数据（SecureStore 里的配对信息不丢，无需重新配对）。
-
-Android（结构已就绪，未在本机验证）：
-
-```bash
-npx expo prebuild --clean
-npx expo run:android --device
-```
+> - Release 构建把 JS 打进 `main.jsbundle`（Hermes 字节码），手机端不需要 Metro。
+> - 改了 `app.json` 的 `version`/`buildNumber` 后要重新 `expo prebuild`：`xcodebuild` 实际读的是
+>   生成的 `ios/DSHRemote/Info.plist`。
+> - 同一 bundle id 覆盖安装会保留 App 数据（SecureStore 里的群体版配对信息不丢）；
+>   但 classic 版遗留的连接记录在 0.1.1 首次加载时会被直接丢弃，需要重新扫码配对。
+> - 签名/描述文件属敏感材料：只留在仓库外，不要提交、不要写进文档。
 
 ---
 
@@ -182,206 +160,155 @@ npx expo run:android --device
 | 字段 | 值 | 说明 |
 |---|---|---|
 | `name` / `slug` | `DSH Remote` / `dsh-remote` | 显示名 / EAS slug |
-| `scheme` | `dshremote` | 与二维码 URI 一致；未来可处理深链 |
-| `ios.bundleIdentifier` | `com.amesucre.dshremote` | 已注册 App ID |
-| `android.package` | `com.amesucre.dshremote` | 与 iOS 对齐 |
-| `ios.infoPlist.ITSAppUsesNonExemptEncryption` | `false` | 仅标准 TLS/证书，免出口合规文档 |
-| `plugins` | expo-camera / expo-secure-store / expo-local-authentication / expo-notifications / expo-build-properties | 权限文案与 iOS 16.4 部署目标 |
-| `extra.dshRemote.relayDomain` | `relay.example.com` | 仅文档/POC 提示用，实际域名来自配对 URI |
-| `extra.dshRemote.useNativeMtlsWebView` | `false` | 预留开关；当前由"原生模块可用 + `certRef` 存在"自动决定 |
+| `scheme` | `dshremote` | 与二维码 URI 一致 |
+| `ios.bundleIdentifier` / `android.package` | `<BUNDLE_ID>` | 已注册 App ID（两端对齐） |
+| `version` | `0.1.5`（iOS build 11 / Android versionCode 11） | 群体版 App 版本线 |
+| `ios.buildNumber` / `android.versionCode` | `7` / `7` | 每次构建递增，便于区分安装包 |
+| `ios.infoPlist.ITSAppUsesNonExemptEncryption` | `false` | 仅标准 TLS，免出口合规文档 |
+| `plugins` | expo-camera / expo-secure-store / expo-local-authentication / expo-build-properties | 权限文案与 iOS 16.4 部署目标 |
+| （无） | — | 不再配置 expo-notifications；构建产物无 `aps-environment` entitlement |
 
-`barcode-scanner` 未使用：Expo SDK 58 的 `expo-camera` `CameraView` 自带二维码扫描（`expo-barcode-scanner` 已废弃）。
+`modules/dsh-mtls/android/build.gradle` 的 `versionCode` 与 `versionName` 同 `app.json` 保持一致。
 
 ---
 
-## 配对流程（App 侧）
+## 群体版配对流程（App 侧）
 
-对应 [§4.3](../docs/remote-access-evaluation.zh.md) 与 [ADMIN-API.md §2/§3](../dsh-remoteService/docs/ADMIN-API.md)：
-
-1. 桌面端「设置 → 远程访问 → 配对新设备」生成一次性密钥（32B，≤120s，单次使用）并显示二维码：
-   `dshremote://pair?v=1&host=<hostId>.<relayDomain>&secret=<base64url>&hostfp=<base64url sha256>&exp=<unix 秒>&relay=<relayDomain>`
-   - 直连端口模式下 `host` 会带端口，例如
-     `host=h_xxx.relay.example.com:11443`；App 支持 `host:port`。
+1. 主机端生成一次性密钥（32B，≤120s，单次使用）并显示二维码：
+   `dshremote://pair?v=2&host=<hostId>.<relayDomain>&port=<port>&secret=<base64url>&hostfp=<base64url sha256>&exp=<unix 秒>&auth=token&relay=<relayDomain>&hostid=<hostId>`
 2. `PairingScreen` 扫码/粘贴 → `src/lib/protocol.ts` **本地严格校验**：
-   - scheme/authority/path、`v=1`、host 必须是 `relay` 域名的子域（防篡改）、secret/hostfp 必须是 32 字节 base64url、`exp` 未过期、参数不重复。
-   - 展示 **完整指纹**（分组显示）+ **短指纹**（人眼对照，仅展示、不作为 pin）+ 倒计时。
-3. 「开始配对」→ 设备密钥 + CSR（**下一里程碑为原生生成**；POC 可打开"POC 调试选项 → 占位 CSR"仅用于 mock 主机）→ `POST https://<host>/__dsh_remote/pair`
-   body：`{ secret, csrPem, deviceName, platform }`。
-4. 主机若要求桌面确认，返回 `{ status: 'pending', ticket }`；`PairingScreen` 显示"等待桌面端确认"，每 1.5s 轮询
-   `GET /__dsh_remote/pair/status?ticket=...`，直到 `paired | denied | expired`。
-5. 收到 `paired` 后：**校验响应里的 hostFingerprint 必须等于二维码里的**（不一致 → `fingerprint_mismatch`，中止），把 host 元数据 + 证书 PEM 写入 SecureStore，并调用原生 `setClientIdentity(certRef)`。
-6. 进入 `WebViewScreen` 加载 `https://<host>/?dsh_mobile=1`。
+   - scheme/authority/path、`v=2`、`auth=token`、host 必须是 `<hostid>.<relayDomain>`（防篡改）、
+     port 合法、secret/hostfp 必须是 32 字节 base64url、`exp` 未过期、参数不重复。
+   - 展示 **完整指纹**（分组）+ **短指纹**（人眼对照，仅展示、不作为 pin）+ 倒计时。
+3. 「开始配对」→ 原生生成/复用 P-256 设备密钥（Secure Enclave / AndroidKeyStore）→
+   `POST https://<host>:<port>/__dsh_remote/pair`，body：`{ secret, publicKey, deviceName, platform }`。
+4. 主机若要求桌面确认，返回 `{ status: 'pending', ticket, sas? }`；App 显示"等待桌面确认"（含 SAS），
+   每 1.5s 轮询 `GET /__dsh_remote/pair/status?ticket=...`，直到 `paired | denied | expired`。
+5. 收到 `paired` 后：**校验响应里的 hostFingerprint 必须等于二维码里的**（不一致 →
+   `fingerprint_mismatch`，中止），把主机元数据 + `deviceKeyLabel` 写入 SecureStore，进入主界面。
 
 安全细节（实现对照）：
-- **私钥不落 JS**：POC 的 `importP12` 由原生 Keychain/Keychain 安装；正式版在 Secure Enclave/AndroidKeyStore 内生成。
-- **配对密钥不落日志**：`PairingUri.secret` 只在内存与 POST body 中出现，UI 不显示、不打印。
-- **错误可读**：`PairingError` 带 `code`（network/timeout/denied/expired/fingerprint_mismatch/unsupported…），页面按 code 给出中文提示与重试路径。
-- **传输可替换**：`PairingTransport` 接口允许后续换成原生 mTLS 传输（`createNativeMtlsTransportPlaceholder()` 已留位），页面代码无需改动。
+- **私钥不落 JS**：P-256 私钥在 Secure Enclave（iOS）/ AndroidKeyStore 内生成和持有，
+  JS 只能拿到公钥（配对用）和签名结果。
+- **配对密钥不落日志**：`GroupPairingUri.secret` 只在内存与 POST body 中出现，UI 不显示、不打印。
+- **错误可读**：`GroupPairingError` 带 `code`（network/timeout/denied/expired/fingerprint_mismatch/
+  pending_timeout/native_unavailable…），页面按 code 给出中文提示与重试路径。
 
 ---
 
-## mTLS 原生模块（`modules/dsh-mtls`）
+## token 会话流程（进入主机后）
+
+```
+POST /__group/auth/challenge { deviceId }
+  → { nonce, expiresAt }
+原生 signGroupChallenge(label, base64(hostId \n deviceId \n nonce))
+  → base64url(DER ECDSA-SHA256)
+POST /__group/auth/token { deviceId, nonce, signature }
+  → { token, expiresAt }（15–30 分钟）
+原生 setSessionCookie({ url, name:'__Host-dsh_session', value:token, maxAgeSeconds })
+  → WebView 后续请求自动携带 cookie
+```
+
+- 进入主机 / 重新可见 / 回前台 / 每 30s 调用一次 `ensureGroupSessionIfNeeded`；缓存有效时只重放
+  cookie，不重复请求；并发调用单飞，避免重复消费 challenge。
+- 首次进入偶发 401/403 时自动强制刷新一次 token 再重试（60s 内最多一次）。
+- relay 返回 404 / `unknown_device`：提示「设备已在主机侧失效，请删除本机连接后重新扫码配对」。
+- token 只在内存 + WebView cookie store：**不写 SecureStore、不打印、不落日志**。
+
+---
+
+## 原生模块（`modules/dsh-mtls`，内部只有群体版）
 
 ### JS API（`modules/dsh-mtls/src/index.ts`）
 
 | 导出 | 作用 |
 |---|---|
 | `isDshMtlsAvailable` | 当前构建是否链接了原生模块（Expo Go 为 `false`） |
-| `setClientIdentity(label)` / `clearClientIdentity()` / `getClientIdentityLabel()` | 配置/读取用于 TLS 客户端证书挑战的 Keychain/Keystore label |
-| `importClientIdentityFromP12(base64, password, label?)` | **POC 调试**：把设备证书+私钥导入系统安全区（iOS：Keychain；Android：系统证书安装界面） |
-| `generateCsr(commonName)` | **下一里程碑**：原生生成 P-256 密钥 + PKCS#10 CSR（当前抛 `DshMtlsUnsupportedError` 语义的错误） |
-| `getDiagnostics()` | 身份是否存在、证书主题、到期时间、原生构建信息（不含密钥材料） |
-| `getDshMtlsWebView()` | 返回原生 mTLS WebView 组件；模块缺失时返回 `null` |
-| `defaultClientIdentityLabel(deviceId)` | 统一的 label 命名约定：`com.dsh.remote.device.<deviceId>` |
+| `generateGroupDeviceKey(label?)` | 生成/复用 P-256 设备密钥，返回 base64url 未压缩公钥 + label |
+| `getGroupDevicePublicKey(label?)` | 读取已存在设备公钥（不存在为 `null`） |
+| `signGroupChallenge(label, messageBase64)` | ECDSA-SHA256 签 challenge，返回 base64url DER |
+| `clearGroupDeviceKey(label?)` | 删除设备密钥（解除配对时用；幂等） |
+| `setGroupSessionCookie(options)` | 把短时 token 注入 `__Host-` host-only cookie |
+| `clearWebCache()` | 清理 WebView 缓存/Cookie/本地存储（设置页「清理缓存」） |
 
-模块缺失时全部**优雅降级**：`requireOptionalNativeModule` 返回 `null`，`DevicesScreen` 显示"未链接"，`WebViewScreen` 回退到 `react-native-webview` 并显示 403 预警。
+模块缺失时全部**优雅降级**：`requireOptionalNativeModule` 返回 `null`，配对页/设置页给出可读提示。
 
-### 接入点（`src/screens/WebViewScreen.tsx`）
+### 原生实现要点
 
-当前逻辑（POC）：
-
-```ts
-const NativeMtlsWebView = useMemo(() => getDshMtlsWebView(), []);
-const useNativeMtlsView = NativeMtlsWebView !== null && Boolean(connection.certRef);
-```
-
-- 原生模块已编译 **且** 有设备身份（`certRef`）→ 使用 `<NativeMtlsWebView url=... clientIdentityLabel=... />`。
-- 否则用 `react-native-webview`，并在顶部显示黄色提示：**它不会出示客户端证书，主机要求 mTLS 时会出现 403**（这是 POC 的预期失败模式，不是 bug）。
-
-文件内有一段完整 TODO 注释说明替换步骤与 iOS/Android 的挑战回调实现位置。
-
-### iOS 实现要点（`ios/`）
-
-- `DSHMTLSWebView.swift`：`WKWebView` 子类 + `WKNavigationDelegate`。
-  - `didReceive challenge`：
-    - `NSURLAuthenticationMethodClientCertificate` → 按 label 从 Keychain 取 `SecIdentity` + 证书链 → `URLCredential(identity:certificates:persistence:.forSession)`；
-    - 找不到身份时 `cancelAuthenticationChallenge` 并向 JS 发 `onLoadingError`（绝不静默继续）；
-    - `ServerTrust` 用系统默认校验（TODO：可选 pin TLS 叶证书 SPKI）。
-  - 把 `didStartProvisionalNavigation / didFinish / didFail*` 映射为 `onLoadingStart / onLoadingFinish / onLoadingError`。
-  - `WKScriptMessageHandler` 暴露 `window.webkit.messageHandlers.dshMtlsBridge` → JS `onMessage`。
-- `DSHMTLSIdentityStore.swift`：`SecPKCS12Import` 导入 + `SecItemAdd(kSecValueRef: label:)`、按 `kSecClassIdentity + kSecAttrLabel` 查找、`SecCertificateCopySubjectSummary`/有效期诊断、删除。
-- `DSHMTLSModule.swift`：`Name("DSHMTLS")`、函数注册、`View(DshMtlsWebView.self)` + props/events。
-
-### Android 实现要点（`android/`）
-
-- `DshMtlsWebViewClient.kt`：`onReceivedClientCertRequest` → `DshMtlsIdentityStore.resolveIdentity(...)` → `request.proceed(privateKey, chain)`；失败 `request.cancel()` 并上报事件。**不放行 TLS 错误**（`onReceivedSslError` 一律 `cancel`）。
-- `DshMtlsIdentityStore.kt`：
-  - 系统 KeyChain（用户安装的 PKCS#12）：`KeyChain.getPrivateKey/getCertificateChain`；
-  - AndroidKeyStore（正式路径）：`KeyStore("AndroidKeyStore").getKey(alias, null)` + certificate；
-  - **AndroidKeyStore 不能导入外部私钥**，所以 `importP12` 走系统证书安装界面（`KeyChain.createInstallIntent` + `EXTRA_PKCS12`，需用户确认）。
-- `DshMtlsWebView.kt`：`ExpoView` 包 `WebView`，暴露 `dshMtlsBridge` JS 接口与加载事件。
-- `expo-module.config.json` 指向 `com.dsh.remote.mtls.DshMtlsModule`，Expo Autolinking 会自动发现 `modules/` 下的本地模块（已用 `npx expo-modules-autolinking search --platform ios` 验证）。
+- **iOS**（`ios/`）：
+  - `DSHMTLSGroupKeys.swift`：`SecKeyCreateRandomKey`（Secure Enclave 优先，失败回退软件 Keychain）、
+    按 `applicationTag` 查私钥、`SecKeyCopyExternalRepresentation` 导出 65B 未压缩点、
+    `SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256)` 签名。
+  - `DSHMTLSModule.swift`：`Name("DSHMTLS")` + group 函数 + `setSessionCookie`
+    （`HTTPCookie`：Secure/SameSite=Strict/host-only；HttpOnly 由 relay `Set-Cookie` 在 WebView 内写入）
+    + `clearWebCache`（`WKWebsiteDataStore.removeData` + `URLCache`）。
+- **Android**（`android/`）：
+  - `DshMtlsGroupKeys.kt`：`KeyGenParameterSpec`（EC `secp256r1`、PURPOSE_SIGN、StrongBox 优先）、
+    `Signature("SHA256withECDSA")`；公钥（非秘密）按 alias 缓存在 SharedPreferences。
+  - `DshMtlsModule.kt`：group 函数 + `CookieManager.setCookie`
+    （`Path=/; Secure; HttpOnly; SameSite=Strict`，不设 Domain）+ 缓存/Cookie/存储清理。
+- `expo-module.config.json` 指向 `DSHMTLSModule` / `com.dsh.remote.mtls.DshMtlsModule`；
+  Expo Autolinking 自动发现 `modules/` 下的本地模块。
 
 ---
 
-## POC：手动安装设备证书/私钥（验证 mTLS 链路）
+## 手机布局（注入 `MOBILE_WEB_SHELL_JS`）
 
-> 正式流程（下一里程碑）：App 原生生成密钥 + CSR → `POST /pair` → 主机设备 CA 签发 → 原生把证书与私钥一起装进 Keychain/Keystore。
-> 在 CSR 实现之前，用下面的手动路径验证 "客户端证书挑战 → 主机 mTLS → DSH UI 加载" 这一段。
+- 会话侧栏 → 左侧抽屉；窄屏右栏 → 全屏覆盖层；窄屏设置 → 全屏 + 分区菜单抽屉；
+  外链 → App 内嵌浏览器（`ExternalPageScreen`，可切系统浏览器）；
+  窄屏隐藏 DSH 的「在主机本机打开」控件（open-in-app，只按稳定 `data-*` 属性隐藏控件本身、
+  不整段隐藏插件槽位）。实现见 `src/lib/mobileWebShell.ts` / `src/screens/WebViewScreen.tsx`，
+  `npm run check:shell` 用无头 Chrome 回归。
 
-请在 **Mac** 上执行（需要主机侧设备 CA 的签发能力；具体命令以 host plugin POC 脚本为准）：
+---
+
+## 验证命令
 
 ```bash
-# 1) 生成 P-256 设备密钥 + CSR（仅 POC；正式版密钥在手机安全区内生成）
-openssl ecparam -name prime256v1 -genkey -noout -out device.key.pem
-openssl req -new -key device.key.pem -subj "/CN=DSH Remote POC Device" -out device.csr.pem
-
-# 2) 用主机的设备 CA 签发（CA 必须就是主机插件用来校验 mTLS 的那个设备 CA）
-openssl x509 -req -in device.csr.pem -CA device-ca.pem -CAkey device-ca.key \
-  -CAcreateserial -days 30 -out device-cert.pem
-
-# 3) 打包 PKCS#12（iOS/Android 都能识别）
-openssl pkcs12 -export -inkey device.key.pem -in device-cert.pem \
-  -out device.p12 -passout pass:dshpoc
-
-# 4) 复制 base64
-base64 -i device.p12 | pbcopy        # macOS
-# Linux: base64 -w0 device.p12
+cd dsh-remoteApp
+npx tsc --noEmit          # TypeScript 全量检查
+npm run check:native      # JS bridge ↔ iOS/Android 原生导出 + classic 文件已删除 + 括号平衡
+npm run check:shell       # 注入手机壳的无头 Chrome 回归（59 项）
+npm run check:ios-env     # Xcode / CocoaPods 环境自检
+npm run check:android-env # Android SDK 环境自检
 ```
 
-然后在 App 中：
-
-1. 进入主界面右上角 ⚙︎ →「设备与安全」。
-2. 展开「POC 调试：导入设备证书（PKCS#12）」。
-3. 粘贴 base64、密码填 `dshpoc` →「导入设备证书」。
-   - iOS：`SecPKCS12Import` 写入 Keychain，并自动 `setClientIdentity(<label>)`；
-   - Android：打开系统证书安装界面，确认后 KeyChain alias 生效。
-4. 成功后 `certRef` 会写回本地连接记录；返回主界面会切换到原生 mTLS WebView 并重新加载。
-5. 在「设备与安全 → 原生 mTLS 模块」确认 `identityPresent = 是`、证书主题/到期时间正确。
-
-**注意**：POC 手动证书只是测试链路；私钥在 Mac 上生成意味着它不再是"不可导出"，正式发布前必须切换到原生密钥生成。
+原生构建/真机验证不能只靠静态检查；按上面「构建与安装」把包装到真机并实测。
 
 ---
 
-## 本次交付实际执行过的验证
+## 真机验收清单（0.1.5 build 11 — ✅ 2026-11-01 用户验收通过；历史清单见 git 历史）
 
-```text
-$ npm install
-# OK（Expo SDK 58 依赖安装成功；见 package-lock.json）
-
-$ npx tsc --noEmit
-# 无输出，exit code 0
-
-$ npx expo config --type public
-# 配置解析成功（修复过 expo-build-properties 要求的 iOS deploymentTarget ≥ 16.4）
-
-$ npx expo-modules-autolinking search --platform ios
-# 输出包含 dsh-mtls → modules/dsh-mtls（本地 Expo Module 会被链接）
-
-$ node <protocol.ts 编译后的 Node 自测>
-# 14 passed, 0 failed
-#   覆盖：合法 URI / 过期 / relay 域名不匹配 / secret 长度 / 版本 / 重复参数 /
-#         错误 scheme / 错误 authority / exp 格式 / 开发端口 / 指纹格式 /
-#         备用码校验 / API URL 拼接 / buildPairingUri 往返
-```
-
-**未执行**（本机环境限制，不能声称完成）：
-
-- `npx expo prebuild` / `pod install` / `npx expo run:ios` —— 需要完整 Xcode；
-- Android Gradle 构建 —— 需要 Android SDK；
-- EAS Build / TestFlight —— 需要 Apple Developer 账号；
-- 真机 mTLS 握手 —— 需要 iPhone + 运行中的主机插件。
-
----
-
-## POC 验收清单（在你的 Mac + iPhone 上）
-
-- [ ] `npx expo prebuild --clean && npx expo run:ios --device` 构建成功，App 启动显示配对页。
-- [ ] 扫码（或粘贴）主机二维码：页面显示 host、**完整指纹**、短指纹、剩余有效期。
-- [ ] 主机侧收到 `POST /__dsh_remote/pair`（host 日志）；若要求审批，手机显示"等待桌面端确认"，桌面点「允许」后手机进入主界面。
-- [ ] （POC 手动证书）「设备与安全」显示 `identityPresent = 是`，证书主题/到期时间正确。
-- [ ] 主界面 WebView 成功加载 DSH UI（`https://<hostId>.<relayDomain>/?dsh_mobile=1`）。
-- [ ] 对照组：未导入证书 / 使用 `react-native-webview` 时，主机返回 **403**（证明 mTLS 确实在生效，而不是被绕过）。
-- [ ] iOS 设备控制台（Xcode → Window → Devices and Simulators → Open Console，或 Xcode 调试日志）能看到客户端证书挑战；主机侧 audit 记录本次访问。
-- [ ] 页面内普通外链在系统浏览器打开；刷新按钮/下拉刷新可用；返回键行为正常。
-- [ ] 解除本机配对：主页/设备页删除记录（确认框）→ 回到主机列表/扫码页；需要时从主页「＋ 配对新主机」重新扫码；旧设备在主机侧撤销/删除。
-- [ ] 推送 token（`provider=apns` + `environment`）经 mTLS 注册到 `POST /__dsh_remote/push-token`（需主机先配置 APNs 私钥）。
+- [x] 覆盖安装 0.1.5 (build 11) 后 App 能启动；旧连接记录按预期丢弃/迁移。
+- [x] 扫码/粘贴 **v2 token 二维码** 完成群体版配对（桌面确认 + SAS 一致）。
+- [x] 进入主机：DSH 手机布局正常（左侧抽屉、右侧栏全屏、设置抽屉、外链内嵌浏览器）。
+- [x] 会话列表 / 消息收发 / WebSocket 实时流正常；长时间停留或切后台再回来仍正常（token 续期）。
+- [x] 主机侧撤销设备后，重新进入会提示「设备已在主机侧失效」，删除本机记录后可重新配对。
+- [x] **不再收到任何推送**（前后台都没有 APNs 通知/应用内通知卡片；设置页无通知项）。
+- [x] 设置页只有版本 / 清理缓存 / 设备与安全；没有 classic/mTLS/证书/推送相关项。
+- [x] 主机「组件」开启/关闭并保存后，App 短暂断线**自动恢复/重新加载**（不再显示「自动重连未恢复」），顶栏 ⏻ 随之动态出现/消失；点击可重启并自动恢复（host-plugin ≥0.2.4）。
+- [x] 「设备与安全」显示 token 认证/主机 ID/端口/设备密钥 label + 该主机的「打开此连接时要求面容」开关；全局 App 锁开关在「设置」页；无证书信息。
+- [x] 外链在 App 内嵌浏览器打开；左上返回回 DSH。
+- [x] 解除本机配对后回到列表/扫码页；重新扫码可再次配对。
 
 ---
 
 ## 已知差距 / TODO
 
-**安全/身份**
-- 原生 CSR 与 Secure Enclave / AndroidKeyStore 密钥生成（`generateCsr` 目前抛未实现异常）。
-- 证书自动续期（默认 30 天，可配 7–90 天）与到期提醒。
-- 可选：pin TLS 叶证书 SPKI（注意 `hostfp` 是**主机身份公钥**指纹，不是 TLS 证书指纹，二者不能混用）。
-- App 锁：已接入生物识别（`expo-local-authentication`），交互/超时行为待真机验收。
-- POC 的 `importP12` 是调试入口，不属于正式身份体系。
-
 **功能**
-- 推送：iOS 自托管 APNs 已接入（APNs device token + environment，经原生 mTLS 注册；前台应用内通知；通知点击跳会话已 2026-10-25 真机验证，其余验收项见 `docs/ACCEPTANCE.md`）；Android FCM 未接入。
-- 设备列表/撤销：管理 API 只对本机浏览器开放且远程代理 deny，POC 在桌面端操作；后续可加 mTLS 隧道接口或深链。
-- 会话列表/审批等原生页面（App 审核 4.2 的长期对策）；多主机列表/删除/主机名同步已实现（0.1.8）。
-- iOS 下拉刷新：`react-native-webview` 无 iOS 下拉刷新，当前用顶部刷新按钮；原生 WebView 落地时可补。
+- Android 原生构建与真机验证：源码只保留 group 能力（AndroidKeyStore P-256、cookie、缓存清理），
+  未在有 Android SDK 的环境编译；FCM 推送未实现（群体版本机推送暂不实现）。
+- 群体版本机推送（APNs/FCM）尚未设计：需要服务端部署方自己的推送通道 + 主机侧信任链，
+  目前 App 完全不注册/不接收推送。
+- 设备列表/撤销仍只在主机侧「远程访问」里操作（App 不调用主机本地管理 API）。
 - 文件上传/下载（WebView 原生选择器、分享面板）未专门处理。
-- Android 的 KeyChain alias 选择/安装后回填、`importP12` 密码校验、AndroidKeyStore 正式路径需真机联调。
+- App 锁：生物识别交互/超时行为待真机复测（0.1.2 已改为仅在冷启动/打开主机连接时触发）。
 
 **工程**
-- 未写 Jest/RNTL 组件测试；协议层已有 Node 自测（可提成正式测试）。
+- 未写 Jest/RNTL 组件测试；协议解析/群体流程目前靠静态检查与真机验收。
 - 未配置 EAS Build 凭据、未做 CI。
 - 应用图标/启动屏沿用模板资源，需替换为正式素材。
-- `ios/`、`android/` 由 prebuild 生成，不入库；改了原生模块需重新 `prebuild --clean`（或 `pod install`）。
-- WKWebView 客户端证书挑战在真机上的行为（含 WebSocket `/api/remote.mux`）必须实测；若不触发，fallback 是 `WKURLSchemeHandler` + `URLSession` 代理方案（见源码注释）。
+- `ios/`、`android/` 由 prebuild 生成，不入库；改原生模块需重新 `prebuild` + `pod install`。
 
 ---
 
@@ -390,20 +317,22 @@ $ node <protocol.ts 编译后的 Node 自测>
 | 现象 | 原因/处理 |
 |---|---|
 | 启动报 "No bundle URL present" | Metro 没起：`npx expo start`；确认 dev client 与 Metro 同一网络。 |
-| "当前构建未链接 mTLS 原生模块" | 用的是 Expo Go。`npx expo run:ios` 构建 dev client。 |
-| WebView 一直 403 | 预期：`react-native-webview` 不带客户端证书，或证书未导入/不被主机 CA 信任。见「POC：手动安装设备证书」。 |
-| `pod install` 失败 / 找不到 DSHMTLS | 先 `npx expo prebuild --clean`；确认 `modules/dsh-mtls/expo-module.config.json` 存在且 podspec 在 `ios/` 下。 |
-| Xcode 签名错误 | Team 未选 / bundle id 冲突：在 Xcode 里设置 Team，或改 `app.json` 的 `ios.bundleIdentifier` 后重新 prebuild。 |
-| `SecPKCS12Import` 失败（status ≠ 0） | 密码错误或 p12 不含证书+私钥（检查 `openssl pkcs12 -info -in device.p12`）。 |
-| Android 导入后 `identityPresent=false` | 系统安装界面未确认完；或 alias 与 `setClientIdentity` 的 label 不一致。重新进入该页刷新诊断。 |
+| "当前构建未链接原生模块" / `native_unavailable` | 用的是 Expo Go，或装了旧包。重新 `expo prebuild && pod install` 构建原生包。 |
+| 扫码提示"版本不支持" | 二维码是 classic v1（`auth` 缺失/`v=1`）：App 只支持群体版 v2 token 二维码，请在主机远程访问里重新生成。 |
+| 配对后页面 401 | token 刚签发但 relay 设备表/隧道未就绪：App 会自动刷新一次；仍失败则返回列表重进。 |
+| 页面提示「设备已在主机侧失效」 | 主机侧已删除/重置该设备：返回主机列表删除本机记录，重新扫码配对。 |
+| WebView 一直转圈 / 白屏 | 确认主机在线、relay 可达、手机网络能访问 relay 域名；用手机 Safari 打开隧道地址验证。 |
 | 扫码无反应（模拟器） | iOS 模拟器没有可用相机；用"手动粘贴配对链接"。 |
-| 扫码后“网络连接失败” | ① 旧二维码没带新端口，重新生成；② `*.relayDomain` 泛解析缺失；③ 手机开了代理/VPN/Private Relay；④ 云安全组/防火墙没放通直连端口；⑤ 主机数据面证书不是 `*.<relayDomain>` 或主机子域证书。用手机 Safari 打开配对 URL 验证。 |
-| 配对请求到了主机但 App 无响应 | 检查主机是否在等待桌面「允许配对」；确认 App 与主机时钟正常。 |
+| 扫码后“网络连接失败” | ① 二维码过期/旧端口，重新生成；② `*.relayDomain` 泛解析缺失；③ 手机代理/VPN/Private Relay；④ 云安全组未放通服务端口。 |
+| 配对请求到了主机但 App 无响应 | 主机可能正在等待桌面「允许配对」；确认 App 与主机时钟正常。 |
+| `pod install` 失败 / 找不到 DSHMTLS | 先 `npx expo prebuild -p ios --no-install`；确认 `modules/dsh-mtls/expo-module.config.json` 与 podspec 存在。 |
+| Xcode 签名错误 | Team/描述文件不匹配：确认设备 UDID 在描述文件里，或改 bundle id 后重新 prebuild。 |
 
 ---
 
 ## 参考
 
-- 接口契约：[`../dsh-remoteService/docs/ADMIN-API.md`](../dsh-remoteService/docs/ADMIN-API.md)
-- 方案评估（§4.3 配对、§4.4 密钥层级、§4.7 App 设计）：[`../docs/remote-access-evaluation.zh.md`](../docs/remote-access-evaluation.zh.md)
-- Expo SDK 58 / RN 0.88；本地 Expo Module 文档：`npx create-expo-module --local`、Expo Modules API（`Module` / `View` / `EventDispatcher` / `Prop`）。
+- 群体服务版设计（token/relay/cookie/租户隔离/攻击用例）：[`../dsh-remoteService/docs/group-service-design.zh.md`](../dsh-remoteService/docs/group-service-design.zh.md)
+- relay 边缘认证接口：[`../dsh-remoteService/packages/relay/README.md`](../dsh-remoteService/packages/relay/README.md) §10
+- 主机插件：[`../dsh-remoteService/packages/host-plugin/README.md`](../dsh-remoteService/packages/host-plugin/README.md)
+- Expo SDK 58 / RN 0.88；本地 Expo Module 文档：`npx create-expo-module --local`、Expo Modules API。

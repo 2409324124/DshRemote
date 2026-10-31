@@ -6,6 +6,291 @@
 
 ---
 
+## 0.1.5（WS 批量断开去抖 + 自动重连修复）真机验收记录 — ✅ 2026-11-01 用户验收通过
+
+> 来源：用户实测（App 0.1.4 build 10 + host 0.2.3）反馈——主机保存「允许手机重启主机 DSH」
+> 后 App 连接断开但**不自动重连**，显示「与主机的实时连接已断开，自动重连未恢复，请点击刷新重试」，
+> 必须手动刷新。根因：host 保存时会断开 Upgrade/WebSocket，`mobileWebShell` 对每个 WS 各上报一次
+> `dsh-ws-close`，同一瞬间多个 close 把 60s/2 次的自动恢复预算一次耗尽。0.1.5 在 App 侧做去抖，
+> 即使 host 侧（0.2.4）行为未变也不会再被一波 close 打爆。
+> **以下结果尚未由用户确认，不得勾选。**
+
+| 项目 | 值 |
+|---|---|
+| App 版本 | 0.1.5（buildNumber 11 / Android versionCode 11） |
+| 构建 | iOS Release（手动签名），`expo prebuild -p ios --no-install` + `pod install` + `xcodebuild` |
+| 构建结果 | `** BUILD SUCCEEDED **`（Xcode Release，手动签名；bundle 版本读到 0.1.5 / 11）；`devicectl` 安装并启动成功，进程存活 |
+| 安装 | `devicectl` 覆盖安装并启动到用户验收用 iPhone（UDID/序列号不入库） |
+| 构建目录 | `/tmp/dsh-ios-group-clean11`（本机临时目录，不入库） |
+| 原生模块 | 与 0.1.4 相同（本版本无原生改动） |
+| 静态检查 | `npx tsc --noEmit`、`npm run check:native`、`npm run check:shell` 均通过（另用状态机模拟验证了「一波 5 个 close 只恢复一次 / reload 后仍断才累加预算 / 2 次后报错 / ws-open 重置」） |
+| entitlement | 构建产物无 `aps-environment`（App 仍不具备推送能力） |
+
+### 本版本改动（WebSocket 自动恢复）
+
+1. **同一波 close 去抖**：`dsh-ws-close` 处理增加两层去抖——已有排队中的恢复（`pending`）时忽略
+   后续 close；2s 内的多个 close 只算一次恢复尝试。host 保存设置同时断多个 socket 时只触发一次恢复。
+2. **预算按「reload 后仍失败」累加**：只有「自动 reload 完成后再次 close」才消耗 60s 窗口内的
+   2 次预算（`reloadedSinceClose`）；首次 close 只尝试恢复、不计数。
+3. **预算重置**：`dsh-ws-open`（实时连接真正恢复）或普通页面加载成功（首次进入 / 用户刷新 /
+   清理缓存 / 重启恢复）时清零；自动恢复 reload 的加载完成不清零（用于判断是否真的连续失败）。
+4. **进行中不再报错**：预算未耗尽时显示警告色提示「与主机的实时连接已断开，正在自动重连…」
+   （带 spinner、不显示「重试」按钮）；只有预算确实耗尽（连续 2 次自动 reload 后仍 close）才显示
+   原来的错误文案与「重试」按钮。
+5. 自动恢复仍走现有 `reload()`（先确保 group session 有效，必要时续期 token）；恢复成功后由
+   `dsh-ws-open` / 页面加载完成**立即刷新一次组件状态**，0.1.4 的 10s 组件轮询兜底保留。
+6. 保留 0.1.2–0.1.4 全部能力：重启主机 ⏻（二次确认/202 轮询/恢复自动 reload）、App 锁
+   （全局冷启动 + 单连接开关）、无推送。
+
+### 待用户确认的验收项（未勾选）
+
+- [x] 覆盖安装 0.1.5 (build 11) 后 App 正常启动；0.1.4 的配对记录与连接开关保持（无需重新扫码）。
+- [x] **主机保存「允许手机重启主机 DSH」（组件开关）后**：App 短暂断线后**自动恢复/重新加载**，
+      不出现「自动重连未恢复，请点击刷新重试」错误，无需手动刷新。
+- [x] 主机保存组件开关后，App 顶栏 ⏻ 在保存后自动出现/消失（10s 内，或重连后立即刷新）。
+- [x] 主机短暂重启/断网恢复后，App 能自动重新加载并恢复实时流；不弹错误。
+- [x] 若主机确实长时间不可达：最多自动尝试 2 次后显示「自动重连未恢复，请点击刷新重试」+
+      「重试」按钮；点「重试」可恢复。
+- [x] 重启主机 ⏻ 功能不回归：组件开启时出现、二次确认、主机恢复后页面自动重载。
+- [x] App 锁不回归：冷启动解锁；单连接「打开此连接时要求面容」按设置生效。
+- [x] 前后台仍**不收到任何推送**；设置页没有通知/推送项。
+- [x] 群体版既有功能不回归：配对（含 SAS）、会话/消息/WebSocket、token 续期、设备撤销提示、
+      外链内嵌浏览器、清理缓存。
+
+### 回归命令（本机）
+
+```bash
+cd dsh-remoteApp && npx tsc --noEmit
+cd dsh-remoteApp && npm run check:native
+cd dsh-remoteApp && npm run check:shell
+# iOS Release 构建（buildNumber 11）见本文件「构建与安装（iOS）」
+```
+
+### 备注 / 未决
+
+- host 侧（0.2.4）会把「保存组件」改成只断主 mux；App 本轮去抖确保即使 host 一次断多个 socket
+  也不会再耗光恢复预算（客户端自保）。
+- relay 0.3.0 不重新部署；Android 本机无 SDK，未构建（仅静态检查）。
+- 「页面加载成功重置预算」对普通加载成立；自动恢复 reload 的加载完成保留预算，等 `dsh-ws-open`
+  或下一次 close 判断是否真正恢复（避免主机一直断开时无限 reload）。
+
+---
+
+> 结论：**用户 2026-11-01 确认验收完毕**（主机保存组件后 App 自动恢复并刷新 ⏻，无需手动刷新/重试）。
+
+
+## 0.1.4（组件开关动态刷新）真机验收记录 — 待用户验收
+
+> 来源：用户反馈「单机版有的组件开关动态刷新没了」——Host 修改「允许手机重启主机 DSH」后，
+> App 顶栏 ⏻ 不会动态出现/消失，需要退出主机再进。0.1.4 新增进入主机后每 **10s** 拉一次
+> `/__dsh_remote/status`（仅在页面可见且非重启中时），保存后最多 10s 内自动更新 ⏻。
+> **以下结果尚未由用户确认，不得勾选。**
+
+| 项目 | 值 |
+|---|---|
+| App 版本 | 0.1.4（buildNumber 10 / Android versionCode 10） |
+| 构建 | iOS Release（手动签名）；构建目录 `/tmp/dsh-ios-group-clean10` |
+| 安装 | 已覆盖安装并启动（UDID 不入库） |
+| 前置 | host-plugin ≥ **0.2.2**（组件保存已修复）；relay 0.3.0 无需重部署 |
+| entitlement | 无 `aps-environment`（仍无推送能力） |
+
+### 待用户确认
+
+- [ ] 主机开启「允许手机重启主机 DSH」并保存后，**不退出主机**，App 顶栏 ⏻ 在约 10s 内自动出现；
+- [ ] 主机关闭该组件并保存后，⏻ 在约 10s 内自动消失（不会误点）；
+- [ ] 重启功能本身仍正常（点 ⏻ → 确认 → 主机重启 → 自动恢复）；
+- [ ] 回归：配对/进入/手机布局/会话/消息/外链正常；App 锁行为（全局冷启动 + 单连接可选）不变；无任何推送。
+
+---
+
+## 0.1.3（App 锁语义调整：全局只冷启动 + 单连接可选面容）真机验收记录 — 待用户验收
+
+> 来源：用户对 0.1.2 的 App 锁语义提出调整——顶层 App 锁不应导致每次打开连接都要求面容；
+> 改为「全局 App 锁只负责冷启动解锁」，并给每台连接增加独立的「打开此连接时要求面容」开关。
+> **以下结果尚未由用户确认，不得勾选**；用户验收通过后再补充结论与日期。
+>
+> 前置：主机端需更新到 **host-plugin ≥ 0.2.2**（0.2.2 修复组件开关保存问题；
+> 远程重启自 0.2.1 起提供）。App 侧不依赖该保存修复，但重启 ⏻ 需主机插件已更新且
+> 在主机「设置 → 远程访问 → 组件」开启「允许手机重启主机 DSH」。relay 本轮不重新部署（0.3.0 不变）。
+
+| 项目 | 值 |
+|---|---|
+| App 版本 | 0.1.3（buildNumber 9 / Android versionCode 9） |
+| 构建 | iOS Release（手动签名），`expo prebuild -p ios --no-install` + `pod install` + `xcodebuild` |
+| 构建结果 | `** BUILD SUCCEEDED **`（Xcode Release，手动签名；bundle 版本读到 0.1.3 / 9）；`devicectl` 安装并启动成功，进程存活 |
+| 安装 | `devicectl` 覆盖安装并启动到用户验收用 iPhone（UDID/序列号不入库） |
+| 构建目录 | `/tmp/dsh-ios-group-clean9`（本机临时目录，不入库） |
+| 原生模块 | 与 0.1.2 相同（含 `groupHttpFetch`：带 `__Host-dsh_session` cookie 的 HTTPS 请求）；本版本无原生改动 |
+| 静态检查 | `npx tsc --noEmit`、`npm run check:native`、`npm run check:shell` 均通过 |
+| entitlement | 构建产物无 `aps-environment`（App 仍不具备推送能力） |
+
+### 本版本改动（App 锁语义）
+
+1. **全局 App 锁 = 只负责冷启动解锁**（设置页「App 锁（冷启动解锁）」）：
+   开启后仅在 App 冷启动首次进入时要求 Face ID / Touch ID；打开主机连接、同步信息、
+   心跳、切换会话、回前台均不再要求识别（不再对所有连接生效）。
+2. **单连接开关**：`StoredConnection` 新增可选 `requireBiometricOnOpen`（旧记录没有该字段
+   = false，加载时只保留 true，迁移安全）。「设备与安全」页（DevicesScreen）为当前主机显示
+   「打开此连接时要求面容」开关；全局 App 锁关闭时开关禁用并提示
+   「需先在「设置」中开启 App 锁，此开关才会生效」。
+3. `App.tsx`：打开连接（主页点开 / 配对完成进入）时只有
+   **全局 App 锁开启 && 该连接 `requireBiometricOnOpen === true`** 才 `setLocked(true)`；
+   解锁成功后不会被系统 active 回调重新上锁（仍不监听 AppState）。
+4. 保留 0.1.2 的「重启主机 DSH」UI（顶栏 ⏻ / 二次确认 / 202 后轮询探活 / 恢复自动 reload）
+   与无推送状态；原生 `groupHttpFetch` 与 group token 会话逻辑未改。
+
+### 待用户确认的验收项（未勾选）
+
+- [ ] 覆盖安装 0.1.3 (build 9) 后 App 正常启动；0.1.2 的配对记录可继续使用（无需重新扫码）。
+- [ ] **全局 App 锁开启时**：App 冷启动首次进入要求 Face ID / Touch ID；解锁后进入主机列表。
+- [ ] **打开任意主机（未单独开启开关）不再要求面容**（即使全局 App 锁开启）。
+- [ ] 「设备与安全」页有「打开此连接时要求面容」开关（在当前主机信息下方）。
+- [ ] 打开该主机的「打开此连接时要求面容」后：从主机列表打开这台主机要求一次面容；
+      打开其它主机不要求（其它主机不受影响）。
+- [ ] **全局 App 锁关闭时**：设备页该开关禁用并提示「需先在「设置」中开启 App 锁」；
+      即使此前记录为开启，打开连接也不要求面容。
+- [ ] 冷启动解锁一次后，进入主机后的同步信息 / 心跳 / 切换会话 / 回前台均**不再**弹面容。
+- [ ] **重启 ⏻**：主机开启组件后顶栏出现 ⏻，点击可重启主机并在恢复后自动重载（0.1.2 行为不回归）。
+- [ ] 前后台仍**不收到任何推送**；设置页没有通知/推送项。
+- [ ] 群体版既有功能不回归：配对（含 SAS）、会话/消息/WebSocket、token 续期、设备撤销提示、
+      外链内嵌浏览器、清理缓存。
+
+### 回归命令（本机）
+
+```bash
+cd dsh-remoteApp && npx tsc --noEmit
+cd dsh-remoteApp && npm run check:native
+cd dsh-remoteApp && npm run check:shell
+# iOS Release 构建（buildNumber 9）见本文件「构建与安装（iOS）」
+```
+
+### 备注 / 未决
+
+- host 端「组件开关保存」bug 由 host-fix 在 host-plugin 0.2.2 修复（与 App 无关）；
+  用户验收重启 ⏻ 前需先更新主机插件，否则组件即使打开也可能保存不上。
+- relay 0.3.0 本轮不重新部署；status/restart 走原生 `groupHttpFetch` 的显式 cookie，不依赖 relay Bearer。
+- Android 本机无 SDK，未构建（仅静态检查）。
+
+---
+
+## 0.1.2（App 锁触发时机/位置修复 + 恢复群体版「重启主机 DSH」）真机验收记录 — 待用户验收
+
+> 来源：用户对 0.1.1 真机验收反馈两件事——
+> A) 开启 App 锁后，进入 App 每次「同步信息 / 心跳」都会强制面容识别；App 锁开关应放到 App 设置页。
+> B) 「重启主机 DSH」不属于单体版功能，群体版需要加回。
+> **以下结果尚未由用户确认，不得勾选**；用户验收通过后再补充结论与日期。
+>
+> 前置：主机端需升级到 **host-plugin ≥ 0.2.1**（恢复 `/__dsh_remote/status` 的
+> `restart.enabled` 与 `/__dsh_remote/restart`；`GET status` / `POST restart` 均按
+> `__Host-dsh_session` cookie 或 Bearer token 鉴权）。relay 本轮**不重新部署**（0.3.0 不变）。
+
+| 项目 | 值 |
+|---|---|
+| App 版本 | 0.1.2（buildNumber 8 / Android versionCode 8） |
+| 构建 | iOS Release（手动签名），`expo prebuild -p ios --no-install` + `pod install` + `xcodebuild` |
+| 构建结果 | `** BUILD SUCCEEDED **`（Xcode Release，手动签名；bundle 版本读到 0.1.2 / 8） |
+| 安装 | 已用 `devicectl` 覆盖安装并启动到用户验收用 iPhone（UDID/序列号不入库）；启动后进程存活 |
+| 构建目录 | `/tmp/dsh-ios-group-clean8`（本机临时目录，不入库） |
+| 原生模块 | `modules/dsh-mtls` 新增 `groupHttpFetch`：带 `__Host-dsh_session` cookie（+ Bearer）的 HTTPS 请求，供主机 status/restart 内部接口使用；不使用设备证书 / mTLS |
+| 静态检查 | `npx tsc --noEmit`、`npm run check:native`、`npm run check:shell` 均通过 |
+| entitlement | 构建产物无 `aps-environment`（App 仍不具备推送能力） |
+
+### 本版本改动
+
+1. **App 锁**：开关从「设备与安全」页移到 **App 设置页**（版本卡片之后）。
+   锁屏只在①冷启动（开关开启时）与②打开主机连接（主页点开主机 / 配对成功进入 WebView）时触发；
+   **删除**了 App.tsx 里两个 `AppState === 'active'` 监听（原先每次回前台/解锁回调都会重新上锁，
+   是反复弹面容的根因）。进入主机后的同步信息、心跳、切会话、回前台都**不再**要求生物识别。
+2. **重启主机 DSH**：进入主机后通过原生 `groupHttpFetch` 请求
+   `GET /__dsh_remote/status`（带会话 cookie），仅当返回 `data.restart.enabled === true`
+   时在顶栏显示 ⏻；点击 → 二次确认 → `POST /__dsh_remote/restart` → 202 后显示「重启中」
+   并轮询 status 探活（每 1.5s、单次 3s 超时、最多 30s）→ 主机恢复后自动重新加载 WebView。
+   失败按 401/405/501（`host-restart-disabled` / `host-restart-unavailable`）/502/503 给可读提示，
+   文案不再出现「设备证书 / mTLS / 证书已失效」。
+3. 版本线：App **0.1.2**、iOS **buildNumber 8**、Android **versionCode 8**
+   （`app.json` / `package.json` / `modules/dsh-mtls/android/build.gradle` 同步）。
+
+### 待用户确认的验收项（未勾选）
+
+- [ ] 覆盖安装 0.1.2 (build 8) 后 App 正常启动；0.1.1 的群体版配对记录可继续使用，无需重新扫码。
+- [ ] **App 锁开关在「App 设置」页**（版本卡片之后），「设备与安全」页不再有 App 锁开关。
+- [ ] 开启 App 锁后：App 冷启动首次进入要求 Face ID/Touch ID；从主页点开主机连接要求一次 Face ID/Touch ID。
+- [ ] **进入主机后不再反复弹面容**：同步信息 / 心跳 / 切换会话 / 切后台再回前台 / 解锁弹窗收起后，
+      均不再出现面容识别；解锁成功后界面保持解锁状态。
+- [ ] 关闭 App 锁后不再要求识别；开关状态重启 App 后保持。
+- [ ] 主机「远程访问 → 组件」开关**关闭**时，进入主机顶栏**没有** ⏻（只有返回/设置/刷新）。
+- [ ] 主机打开「允许手机重启主机 DSH」后进入主机，顶栏出现 ⏻。
+- [ ] 点 ⏻ → 二次确认 → 主机 DSH 重启；App 显示「重启中」，主机恢复后页面**自动重新加载**并恢复实时连接。
+- [ ] 组件未开启 / 主机不支持时点重启的提示可读（如「主机未允许手机重启 DSH…」），
+      且不出现「设备证书 / mTLS」措辞。
+- [ ] **前后台均仍不收到任何推送**；设置页没有通知/推送项。
+- [ ] 群体版既有功能不回归：配对（含 SAS 确认）、会话列表/消息收发、WebSocket 实时流、
+      切后台回前台 token 续期、设备撤销提示、外链在 App 内嵌浏览器打开、清理缓存。
+
+### 回归命令（本机）
+
+```bash
+cd dsh-remoteApp && npx tsc --noEmit
+cd dsh-remoteApp && npm run check:native
+cd dsh-remoteApp && npm run check:shell
+# iOS Release 构建（buildNumber 8）见本文件「构建与安装（iOS）」
+```
+
+### 备注 / 未决
+
+- relay 边缘（0.3.0，本轮不重部署）对普通隧道流量**只校验 `__Host-dsh_session` cookie**；
+  App 的 JS `fetch` 拿不到 WebView 的 cookie store，因此 status/restart 改走原生
+  `groupHttpFetch`（显式 cookie + Bearer）。若未来 relay 支持 Bearer，可去掉 cookie 兼容。
+- 若主机端尚未升级到 host-plugin ≥ 0.2.1：status 响应没有 `restart` 字段 → ⏻ 不显示（预期）。
+- Android 本机无 SDK，未构建（与 0.1.1 相同，仅静态检查）。
+
+---
+
+## 0.1.1（剥离 classic / 只保留群体版）真机验收记录 — 待用户验收
+
+> 来源：App 已删除全部 classic/单体 mTLS 模式与 APNs 推送 / 应用内通知 / 远程重启主机，
+> 只保留群体版（v2 token 配对 + P-256 设备密钥 + 短时 token）。
+> **以下结果尚未由用户确认，不得勾选**；用户验收通过后再补充结论与日期。
+>
+> 前置：服务端需先升级到 **relay 0.3.0 / host-plugin 0.2.0**（本分支只含群体版）；
+> 旧 App 连接记录会被丢弃，需重新扫码配对。
+
+| 项目 | 值 |
+|---|---|
+| App 版本 | 0.1.1（buildNumber 7 / Android versionCode 7） |
+| 构建 | iOS Release（手动签名），`expo prebuild -p ios --no-install` + `pod install` + `xcodebuild` |
+| 安装 | 覆盖安装到用户验收用 iPhone（`devicectl`；UDID/序列号不入库） |
+| 构建目录 | `/tmp/dsh-ios-group-clean`（本机临时目录，不入库） |
+| 原生模块 | `modules/dsh-mtls` 只含群体版：P-256 设备密钥 / 签名 / `__Host-` cookie / 缓存清理 |
+| 静态检查 | `npx tsc --noEmit`、`npm run check:native`、`npm run check:shell` 均通过 |
+| entitlement | 构建产物无 `aps-environment`（App 不再具备推送能力） |
+
+### 待用户确认的验收项（未勾选）
+
+- [ ] 覆盖安装 0.1.1 (build 7) 后 App 正常启动；0.1.0 的群体版配对记录可继续使用（升级迁移），
+      classic 版遗留记录被丢弃。
+- [ ] 扫码/粘贴 v2 token 二维码完成群体版配对（桌面确认 + SAS 一致）。
+- [ ] 进入主机后 DSH 手机布局正常；会话列表 / 消息收发 / WebSocket 实时流正常。
+- [ ] 切后台再回前台、长时间停留后仍能正常访问（token 续期）。
+- [ ] 主机侧撤销设备后，重新进入提示「设备已在主机侧失效」并引导重新配对。
+- [ ] **前后台均不再收到任何推送**；设置页没有通知/推送项。
+- [ ] 主界面顶栏没有「重启主机」按钮（只有返回 / 设置 / 刷新）。
+- [ ] 设置页只有版本 / 清理缓存 / 设备与安全，无 classic/mTLS/证书项。
+- [ ] 「设备与安全」页显示 token 认证、主机 ID、端口、P-256 设备密钥 label、App 锁开关；
+      无证书 / mTLS 诊断 / 证书导入项。
+- [ ] 外链在 App 内嵌浏览器打开；解除本机配对后可重新扫码配对。
+
+### 回归命令（本机）
+
+```bash
+cd dsh-remoteApp && npx tsc --noEmit
+cd dsh-remoteApp && npm run check:native
+cd dsh-remoteApp && npm run check:shell
+# iOS Release 构建（buildNumber 7）见 dsh-remoteApp/README.md「构建与安装」
+```
+
+---
+
 ## 群体服务版（A 模式 / token 鉴权）真机验收记录 — 2026-11-01
 
 > 分支 `feat/group-service`：relay 终止 TLS、主机出站隧道、设备 P-256 密钥 + 短时 token
@@ -62,226 +347,47 @@ xcodebuild -workspace DSHRemote.xcworkspace -scheme DSHRemote -configuration Rel
 
 ---
 
-## 0. 环境就绪检查
+---
 
-> 如果 Xcode 已安装但 `npm run check:ios-env` 仍报错，通常还需要（需管理员密码）：
->
-> ```bash
-> sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-> sudo xcodebuild -license accept
-> brew install cocoapods        # 或 sudo gem install cocoapods
-> ```
-
+## 构建与安装（iOS）
 
 ```bash
 cd dsh-remoteApp
 npm install
-
-# iOS（需要完整 Xcode，不是 Command Line Tools）
-npm run check:ios-env
-# 期望最后一行为：✅ iOS 环境就绪
-# 如提示仅 CLT：从 App Store 安装 Xcode，然后
-#   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-#   sudo xcodebuild -license accept
-#   brew install cocoapods   (或 sudo gem install cocoapods)
-
-# Android（需要 Android SDK + JDK 17+）
-npm run check:android-env
-# 期望最后一行为：✅ Android 环境就绪
+npx expo prebuild -p ios --no-install
+cd ios && CP_HOME_DIR="$PWD/.pods-home" CP_CACHE_DIR="$PWD/.pods-cache" pod install
+cd ..
+xcodebuild -workspace ios/DSHRemote.xcworkspace -scheme DSHRemote -configuration Release \
+  -destination 'generic/platform=iOS' -derivedDataPath /tmp/dsh-ios-build \
+  CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=<TEAM_ID> \
+  PROVISIONING_PROFILE_SPECIFIER=<PROFILE_UUID> \
+  CODE_SIGN_IDENTITY='Apple Development: <NAME> (<CERT_ID>)' build
+xcrun devicectl device install app --device <IPHONE_UDID> /tmp/dsh-ios-build/Build/Products/Release-iphoneos/DSHRemote.app
+xcrun devicectl device process launch --device <IPHONE_UDID> <BUNDLE_ID>
 ```
 
-其它前置：
+> 签名材料、Team ID、描述文件 UUID、UDID、bundle id 走本机参数/环境变量，不入库。
+
+Android（当前开发机无 SDK）：需要 Android SDK + JDK 17+，`npx expo prebuild -p android` 后
+`npx expo run:android --variant release`；同一份 JS/原生 group 模块，验收项同 iOS。
+
+## 回归命令
 
 ```bash
-npx expo config --type public      # Expo 配置可解析
-npx tsc --noEmit                   # TS 0 错误
-npm run check:native               # JS bridge ↔ iOS/Android 原生接口一致
+cd dsh-remoteApp && npx tsc --noEmit
+cd dsh-remoteApp && npm run check:native
+cd dsh-remoteApp && npm run check:shell
+cd dsh-remoteApp && npx expo config --type public
 ```
 
----
+## 已知限制
 
-## 1. Host（电脑端）准备
+- Android 未构建/未真机（仅静态检查）。
+- 群体版暂无本机推送能力（App 已移除 APNs/通知框架与代码；设计上后续走服务端统一推送）。
+- iOS 原生无法程序化设置 HttpOnly cookie（依赖 relay `Set-Cookie`；App 注入的会话 cookie 为 Secure/SameSite=Strict/host-only）。
+- 旧 classic/单体版连接记录会在升级后直接丢弃（本分支只支持群体版）。
 
-```bash
-# 1) 启动一个独立 web 实例（不要与 Desktop App 共用 DSH_HOME）
-dsh --profile web --no-open --port 3080
+## 证据与脱敏
 
-# 2) 打开 http://127.0.0.1:3080 → 设置 → 远程访问
-#    - 启用远程访问
-#    - relay 地址 / hostId / hostToken / relayDomain
-#    - 生产证书文件（或本地开发自签）
-#    - 开启「新设备配对需要本机确认」
-
-# 3) 部署自检（生产 relay 就绪时）
-cd dsh-remoteService
-./scripts/check-deploy.sh <relay-domain> <hostId>
-```
-
-记录：hostId = `________`，relayDomain = `________`。
-
----
-
-## 2. iOS 构建
-
-```bash
-cd dsh-remoteApp
-npx expo prebuild --platform ios        # 生成 ios/，会 pod install
-npx expo run:ios --device               # 选择你的 iPhone
-```
-
-> 必须用 `run:ios` 构建 dev client，**Expo Go 不含本地原生模块 `dsh-mtls`**。
-> 首次运行需在 iPhone 上信任开发者证书（设置 → 通用 → VPN与设备管理）。
-
-## 3. iOS 验收清单
-
-| # | 步骤 | 期望结果 | 结果 |
-|---|---|---|---|
-| 1 | 冷启动 App | 若已开启 App 锁，立即要求 Face ID/Touch ID；解锁后进入 | ☐ |
-| 2 | 桌面 DSH → 远程访问 → 生成配对二维码 | 手机扫码，显示主机指纹/SAS，确认后桌面弹出「允许/拒绝」 | ☐ |
-| 3 | 本机点「允许」 | App 显示已配对，自动安装设备证书 | ☐ |
-| 4 | 打开远程会话 | WKWebView 加载 `https://<hostId>.<relayDomain>/`；**无 403/空白** | ☐ |
-| 5 | 设备页 → 主机状态 | 显示 hostId/域名/TLS 证书到期/relay 已连接/设备数 | ☐ |
-| 6 | DSH 会话内操作（发消息/切换/WS 状态） | 正常；WS 不断连（可看设备页 relay 状态） | ☐ |
-| 7 | 关闭 App 再回前台 | 再次要求生物识别（App 锁开启时） | ☐ |
-| 8 | 推送：桌面触发一轮任务结束 | iPhone 收到**会话标题 + 本轮助手回复摘要**通知（锁屏可见，注意隐私） | ☐ |
-| 9 | iOS 设置 → 通知 → DSH Remote | 权限已授予；后台/锁屏也能收到 | ☐ |
-| 10 | 桌面设备页撤销该设备 | 手机当前会话/WS 立即断开，后续请求 403 | ☐ |
-| 11 | 重新配对 | 删除本机记录后从主页「＋ 配对新主机」重新扫码；新证书可正常访问，旧设备仍被撤销 | ☐ |
-| 12 | 主机证书轮换（acme.sh 覆盖 cert/key） | 手机访问不中断（或重连后恢复） | ☐ |
-| 13 | 推送（App 在前台，设置→应用内通知开启） | 顶部出现应用内通知卡片，**不出现系统横幅**；20s 自动消失（0.1.13 起；原 5s 太短来不及点）；点击卡片打开对应会话（非当前会话时） | ✅ 2026-10-25（功能）/ ✅ 2026-10-27（20s 停留时长，真机确认） |
-| 14 | 推送（App 在后台/锁屏） | 出现系统通知（标题=会话标题，正文=助手回复摘要）；**点击通知打开对应会话**（冷启动/多主机也要正确） | ✅ 2026-10-25（单主机跳转已验证；多主机注册已补设备身份切换，待复验） |
-| 15 | 设置页（Home / 主机页顶栏 ⚙︎） | 显示 App 版本 `0.1.11 (build 13)`；应用内通知开关可持久化；通知权限状态正确；「发送测试通知」行为符合开关 | ☐ |
-| 16 | 设置页 → 清理 WebView 缓存 | 弹确认框；清理后 WebView 重新加载主机页面且状态正常（iOS：WKWebsiteDataStore 全类型 + URLCache；Android：HTTP 磁盘缓存 + Cookie/WebStorage + 认证缓存） | ☐ |
-| 17 | 运行中会话：App 后台 2+ 分钟后回来 | 计时/状态与主机一致，不再出现旧值（如 4 分钟）与真实值（20 分钟）反复闪动 | ☐ |
-| 18 | 会话 header 右角「展开右侧栏」按钮（含新建会话/历史会话） | 右栏**全屏**覆盖 WebView：顶部 tab 条与右上「收起」按钮可见可点，文件/浏览器/终端 tab 可切换；点「收起」回到会话；收起后聊天可正常滚动/点击/输入；横屏（>760px）走 DSH 原生布局不强制全屏 | ☐ |
-| 19 | 前台推送正好属于当前正在查看的会话 | 不显示应用内通知卡片（页面本身已更新）；关闭应用内通知开关时连系统横幅也不显示；切到其它会话/页面时仍提示 | ✅ 2026-10-25 |
-| 20 | 点击应用内卡片（推送属于其它会话） | 跳到对应会话；点击后卡片消失、页面加载正常 | ✅ 2026-10-25 |
-| 21 | DSH 设置（左侧栏 → 设置）在手机上的布局 | 设置**全屏**（不再是 342px 居中弹窗）；左侧分区菜单默认收起，点右上菜单/左缘右滑打开抽屉，点分区项或抽屉外收起；左上 `‹` 返回退出设置；>760px（横屏/平板）恢复 DSH 原生居中弹窗 | ✅ 2026-10-25（iPhone 17 Pro Max / iOS 27.0 / 0.1.5 build 6，Release 真机；打开→菜单→切分区→返回→旋转均通过） |
-| 22 | 设置 → 账号与余额 →「更多 → 查询用量 / 充值 / 更多账号信息」；账号菜单「意见反馈」 | 在 **App 内嵌浏览器**打开对应 DeepSeek 平台页（全屏覆盖层：左上返回/刷新/右上「在浏览器打开」、底部 URL）；**左上返回无条件关闭内嵌页回 DSH**（平台页 history 很长也不会卡住），Android 返回键同样；`↗` 可切系统浏览器；返回 DSH 后页面与设置仍在、会话正常；同源链接（会话/设置等）不受影响 | ✅ 2026-10-25（iPhone 17 Pro Max / iOS 27.0 / 0.1.5 build 6，Release 真机；内嵌页打开、左上返回关闭、↗ 切浏览器、关闭 App 后登录态仍在；返回 DSH 后状态正常） |
-| 23 | 主界面顶栏（进入主机后） | 标题仍为主机名；副标题只显示「已连接/连接中/连接异常 · 主机ID」，不再显示完整 relay 域名/端口（直连模式保留 IP） | ✅ 2026-10-25（iPhone 17 Pro Max / iOS 27.0 / 0.1.7 build 9，Release 真机；副标题显示「已连接 · 主机ID」） |
-| 24 | 主界面底部连接信息条 | **Release 构建不显示**；WebView 边到边铺到屏幕底部，底部安全区由注入手机壳在 DSH 页面容器内用 `env(safe-area-inset-bottom)` 预留（背景随 DSH 主题、**无 App 背景黑边**），输入框不被 home indicator 遮挡；Debug 构建仍显示页面标题 + 当前 URL（开发诊断用） | ✅ 2026-10-25（iPhone 17 Pro Max / iOS 27.0 / 0.1.7 build 9，Release 真机；无底部信息条、无黑边，页面背景连续，输入框未被遮挡） |
-| 25 | 左侧抽屉内「展开其余 N 个会话 / 收起」 | 点击后抽屉**保持打开**、会话列表就地展开/收起；点具体会话行仍正常收起抽屉并进入会话；工作区行保持打开；点背景可收起 | ✅ 2026-10-26（iPhone 17 Pro Max / iOS 27.0 / 0.1.10 build 12，Release 真机；展开/收起、会话行、背景关闭均通过） |
-| 25 | 主页主机卡片「删除」（不进入配对流程） | 有独立删除入口 + 确认框；确认后只清本机配对记录与设备证书，记录从列表消失；主机侧设备记录仍需在桌面端单独撤销 | ✅ 2026-10-26（iPhone 17 Pro Max / iOS 27.0 / 0.1.8 build 10，Release 真机） |
-| 26 | 删除最后一条配对记录 | 删除后回到空列表/配对页；**旧版本单连接（v1）记录不会重新出现** | ✅ 2026-10-26（真机：删除后进入配对页；顺带修复 v1 数据复活 bug） |
-| 27 | 桌面改主机名 → 手机同步 | 回主页/回前台（或点刷新）后，卡片标题更新为新主机名，无需重新配对 | ✅ 2026-10-26（真机：改名后重启 App 显示新名字；再回到主页会继续同步） |
-| 28 | 配对页默认设备名 | 默认预填**系统本机设备名**（不再写死「我的 iPhone」）；用户可自定义；旧版本保存的默认名不再沿用 | ✅ 2026-10-26（真机：预填系统设备名；设备名最终写入主机设备列表） |
-| 29 | 主机侧撤销设备 → App 提示 | 回到主页/重启 App 后卡片显示「主机侧已解除配对」警示（含撤销时间），可直接删除本机记录 | ✅ 2026-10-26（真机：撤销后重启 App 出现红色警示卡与删除入口） |
-| 30 | 删除后重新配对 | 删除本机记录后可重新扫码配对，新设备证书正常可用 | ✅ 2026-10-26（真机：删除 → 重新配对 → 主页恢复正常） |
-| 31 | 设备与安全页解除入口合并 | 只有单一「解除本机配对 / 删除本机配对记录」入口（不再有独立的“清除本地凭据并重新配对”按钮）；确认后删除记录并返回主机列表/扫码页 | ✅ 2026-10-26（iPhone 17 Pro Max / iOS 27.0 / 0.1.9 build 11，Release 真机；页面仅保留一个解除入口，返回主页后配对记录已清除） |
-| 32 | 会话头/右栏「在主机本机打开」控件（DSH open-in-app） | 手机 App（含 iPad 宽度）不再显示 DSH 的「打开工作区 / 显示文件位置 / 打开文件」split 控件与加载骨架；**同一 `[data-slot]` 里的其它插件按钮仍可见可点**；桌面 DSH 浏览器不受影响（壳只注入 App WebView） | ✅ 2026-10-27（App 0.1.12 build 14 起；用户反馈 App 上不可见这些控件——原本也未注意到该控件，按「不可见」记录；`npm run check:shell` 59/59 覆盖窄屏/宽屏隐藏、同 slot 按钮保留） |
-| 33 | 顶栏 `⏻`「重启主机」 | 点按钮出现二次确认；确认后显示「重启中」+ spinner 且按钮禁用；主机接受（202）→ 等待主机恢复 → 自动重新加载页面；旧 Host 半（无端点）/不支持/被禁用/证书失效/超时均有可读提示；等待期间返回主页不残留轮询/弹窗；主机重启后 WebView 恢复正常 | ✅ 2026-10-27（host-plugin **0.1.15**（重启修复 + 等待作答推送合并版本）+ App 0.1.12 build 14，Release 真机；用户实测：点 ⏻ → DSH 窗口关闭且无崩溃弹窗 → 自动拉起 → App 自动恢复。修复迭代与验证见 [`docs/diagnostics/10-mobile-host-actions.md`](../../docs/diagnostics/10-mobile-host-actions.md) §2） |
-| 36 | 「重启主机」组件开关（默认关闭） | Host「设置 → 远程访问 → 组件」里的「允许手机重启主机 DSH」：默认关闭；开启并保存后 App 顶栏出现 ⏻，关闭后重新进入主机 ⏻ 消失；关闭状态下即使直接调用重启接口也返回 501 `host-restart-disabled` 且不调度重启（审计 failed/disabled） | ✅ 2026-10-27（host-plugin 0.1.16 + App 0.1.14 build 16/17，Release 真机；用户实测：① 默认关闭时 App 顶栏无 ⏻；② DSH 设置开启「允许手机重启主机 DSH」并保存后，App 内点 ↻ 刷新 / WS 重连即出现 ⏻（无需退出主机），点击可正常重启；③ 关闭后刷新即消失。host `npm test` 163/163 覆盖关闭 501/不调度/审计、/status 两态、设置页开关保存） |
-| 35 | 左侧抽屉「工作区」右侧 ＋「添加工作区」 | App 上（含 iPad 宽度）不再显示该按钮——桌面壳里它会拉起**主机端**原生目录选择器，手机点了没有意义；同区域的「搜索 / 视图选项」等按钮仍可见可点 | ✅ 2026-10-27（用户实测确认已消失；`npm run check:shell` 59/59） |
-| 34 | Agent 调用 `ask_user_question` 等待作答 | 手机后台/锁屏收到系统通知：标题=会话名，正文=**正在等待你的回答**；点击通知跳到对应会话；当前正在看该会话时不弹提示；同一问题不重复推送 | ☐ 待验收（Host 半需重启 DSH 加载；App 无需重装） |
-
-> 2026-10-26 构建记录：iOS Release **0.1.11 (build 13)** 已用设备描述文件构建，`xcrun devicectl`
-> 安装并启动到 iPhone 17 Pro Max / iOS 27.0 成功（版本号经 `devicectl device info apps` 核对）。
-> 2026-10-26 追加：iOS Release **0.1.12 (build 14)** 同样完成构建 / `devicectl` 安装 / 启动，
-> 版本号核对通过；该包包含 #32/#35 的隐藏修复与 #33 重启按钮的完整链路。
-> （其后 0.1.13 build 15 由并行会话构建，工作区已包含本轮隐藏修复。）
-> 2026-10-27 追加：#36「重启主机」组件开关 —— iOS Release **0.1.14 (build 16)** 构建/安装后，
-> 补充「刷新/重连动态刷新按钮」优化并构建 **0.1.14 (build 17)** 安装复验通过（版本号经
-> `devicectl device info apps` 核对）。
-> #32/#33 的交互细节本环境没有 UI 自动化能力，只能由人工点按确认。
->
-> 验收过程说明（2026-10-26）：定位「主机撤销后同步请求为何没有 401/403」时，曾临时在
-> **Release 验收包**中加入屏上同步诊断文本（未使用 Debug scheme、未改动证书校验/私钥路径）；
-> 定位到 iOS URLSession 在客户端证书被主机拒绝时会报 `requires a client certificate`
-> 后，已移除诊断代码并用**正常 Release 构建**重新安装复验（#25–#30 均通过）。
-
-原生模块自检（可选）：在设备页打开诊断，应显示
-`identityPresent=true`、`subject=CN=...`、`notAfter=...`、`nativeBuild=DSHMTLS/...`。
-
-## 4. Android 构建/验收
-
-```bash
-npx expo prebuild --platform android
-npx expo run:android --device
-```
-
-验收清单同 iOS，差异：
-
-- 生物识别：指纹/面部（`expo-local-authentication`），设备页开关；
-- AndroidKeyStore 证书安装：配对后设备页 `identityPresent=true`；
-- 推送：本版本仅实现 iOS 自托管 APNs；Android FCM 通道尚未接入；
-- 撤销设备后连接断开（同 #10）；
-- 右侧栏全屏覆盖层（#18）同 iOS：为注入 WebView 的 JS/CSS，两端共用（尚未在 Android 设备验证）。
-
-## 5. 推送（iOS，自托管 APNs）
-
-App 默认由**主机直连 APNs**（不经过 relay / Expo）。iOS 配置：
-
-1. Apple Developer（付费账号）→ Keys → 新建 **Apple Push Notifications service (APNs)** key：
-   - **Environment** 选 **Sandbox & Production**（推荐一把 key 覆盖开发和发布；只选 Sandbox
-     的 key 只能发开发包，上架/Ad Hoc 前要换成覆盖生产环境的 key）；
-   - **Key Restriction** 选 **Team Scoped (All Topics)**（或 Topic Specific 选 App 的 bundle ID）；
-   - 下载 `AuthKey_<KEY_ID>.p8`（只能下载一次），记下 Key ID；Team ID 在会员信息里；
-   - 本机签名材料**只放仓库外**（例如 `~/.dsh/remote-access/signing/`，`chmod 600`），
-     不要放进仓库任何目录（包括已被 `.gitignore` 忽略的 `Certificates/`——`.gitignore`
-     不是安全边界）。
-2. 在 DSH 主机：把 `.p8` 放到仓库外（例如 `~/.dsh/remote-access/apns/`，`chmod 600`），
-   然后 DSH 设置 → 远程访问 → 推送：
-   - 「推送提醒」开、「自托管直连 APNs」开；
-   - APNs 私钥路径 / Key ID / Team ID / Topic（= `com.amesucre.dshremote`，以 app.json 的
-     `ios.bundleIdentifier` 为准）；
-   - 可选：同会话冷却（默认 30s）。
-3. 重新构建并安装 App（本批次含原生变更 `evaluateJavaScript` / `clearWebCache`，**必须用新原生包**；
-   原生 entitlement 已含 `aps-environment`，不需要改 Xcode）：
-
-   ```bash
-   cd dsh-remoteApp
-   npx expo run:ios --device          # Debug + Metro
-   # 或沿用 STATUS.md 里的手动签名 xcodebuild + devicectl install
-   ```
-
-4. 打开 App → 进入主机 → 允许通知；控制台应出现
-   `[dsh-remote] push registered (apns/development)`（发布包为 `apns/production`）。
-5. 主机侧确认注册：`~/.dsh/remote-access/push-tokens.json` 中 `provider=apns` 且带 `environment`。
-6. 手机切后台/锁屏，在 DSH 完成一轮对话（非子代理）→ 收到通知：
-   - **标题** = 该会话的标题（没有时退回首条用户消息）；
-   - **正文** = 本轮最后一条助手回复的截断摘要（失败时带 `⚠️`，无文本时用状态兜底）；
-   主机 audit 出现 `push-trigger`，`/status` 的 `push.tokens ≥ 1`。
-
-> **前台 vs 后台**：App 在前台时默认不弹系统横幅，改在 App 内显示通知卡片（设置页可关闭
-> 「应用内通知」，关闭后前台恢复系统横幅）；后台/锁屏始终是系统通知。
-> **隐私提示**：通知标题/正文含会话内容，会经过 APNs 并可能显示在锁屏/通知中心；介意的话
-> 请在 iOS 设置里关闭锁屏预览，或关闭推送。
-> **环境匹配**：开发签名包 → APNs sandbox；App Store / Ad Hoc（distribution profile）→
-> production。主机按 App 上报的 `aps-environment` 自动选择；**APNs key 的环境范围必须覆盖
-> 当前 App 包**，否则 APNs 返回 `403 InvalidProviderToken`（换 key 后无需重新配对/重装，
-> 设备 token 不变）。Android FCM 通道尚未接入。
-
-## 6. 验收记录模板
-
-| 项目 | 结果 | 证据（截图/日志） |
-|---|---|---|
-| iOS 编译（generic，无签名） | ✅ BUILD SUCCEEDED（2026-10-24） | /tmp/ios-build3.log |
-| iOS 真机安装/启动 | ✅ 已安装并启动，JS bundle 加载成功 | `mockups/ios-pairing.png` |
-| Secure Enclave 身份（identityPresent） | ✅ P-256 key `SE=true`，CSR 经 host CA 签发，链/公钥校验通过 | `/tmp/metro.log`、`/tmp/iphone-se-cert.pem` |
-| iOS WebView mTLS | ✅ 真机 + 本地 Docker relay + 本机 host：原生 mTLS WebView 成功加载 DSH UI，Keychain 身份生效 | `mockups/ios-mtls-dsh-ui.png` |
-| Secure Enclave 身份（identityPresent） | | |
-| 配对 + 桌面确认 | | |
-| 推送（会话标题 + 摘要） | | |
-| 前台应用内通知（不弹系统横幅） | | |
-| 设置页（版本/通知开关/清缓存） | | |
-| 后台恢复后计时/状态一致 | | |
-| 生物识别 App 锁 | | |
-| 设备撤销立即断链 | | |
-| 证书轮换 | | |
-| Android WebView mTLS | | |
-| Android 推送 | | |
-
-把截图/日志放到 `dsh-remoteApp/docs/evidence/`（可选），并在 `POC-REPORT.md` 勾选对应项。
-
-## 7. 常见问题
-
-| 现象 | 排查 |
-|---|---|
-| `xcodebuild` 报 command line tools | 安装完整 Xcode 并 `sudo xcode-select -s ...` |
-| `pod install` 失败 | `brew install cocoapods`；`npx expo prebuild --clean` |
-| WebView 403 `device-revoked` | 设备被撤销；重新配对 |
-| WebView 403 `unknown-device` | 证书与 host 设备表不匹配；检查配对是否用同一 hostId |
-| WebView 空白/TLS 错误 | 检查主机证书域名/SAN 是否为 `<hostId>.<relayDomain>`，以及系统时间 |
-| 生物识别开关灰掉 | 设备无 Face ID/Touch ID/指纹，或未录入 |
-| 推送 token 注册失败 | 原生 mTLS 是否编译进 dev client；主机设置里的 APNs 私钥/Key ID/Team ID/Topic |
-| 撤销后手机仍能访问 | 确认 host 插件版本包含撤销断链逻辑（本轮已实现） |
+截图/日志放 `dsh-remoteApp/docs/evidence/`（可选）；提交前按根目录 `AGENTS.md`「三」脱敏
+（域名、hostId、设备 ID、UDID、序列号、token、cookie、二维码一律替换为占位符）。
