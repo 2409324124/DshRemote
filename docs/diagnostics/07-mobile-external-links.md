@@ -56,7 +56,7 @@ App 侧现状：
   但生产用原生 mTLS View，所以这条兜底覆盖不到。
 
 > 顺带说明：这不是「远程管理入口被隐藏」那种安全边界（见
-> `dsh-remoteService/docs/POC-REPORT.md` 1.29 / `client.js` 的 `isRemoteWebView`），
+> `client.js` 的 `isRemoteWebView` 历史实现），
 > 账号页本身在远程 WebView 里是可见、可用的，只是外链跳不出去。
 
 ## 2. 修复

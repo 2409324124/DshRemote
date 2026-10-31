@@ -430,7 +430,7 @@ curl -s http://127.0.0.1/healthz    # 200
 | 后台 401 | admin token 不对/未带 `Authorization: Bearer`；token 在 `data/admin-token` |
 
 协议细节（控制消息、二进制帧格式）见 `packages/protocol/index.js`；主机插件管理 API 契约见
-`dsh-remoteService/docs/ADMIN-API.md`；群体版设计见 [docs/group-service-design.zh.md](../../../docs/group-service-design.zh.md)。
+群体版设计见 [docs/group-service-design.zh.md](../../../docs/group-service-design.zh.md)。
 
 ---
 

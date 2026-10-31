@@ -184,6 +184,19 @@ openssl s_client -connect <relayDomain>:<mobilePort> -servername <hostId>.<relay
 
 ## 7. 升级、备份与安全
 
+### 7.1 从旧版本升级（classic/单体版 → 群体版）
+
+本分支已删除 classic 单机版；如果服务器上还跑着旧 relay（0.2.x / classic 镜像）：
+
+1. `docker load` 新镜像 `dsh-remote-relay:0.3.0-group`，改 `.env` 的 `DSH_RELAY_IMAGE`，`up -d --force-recreate`；
+2. 旧 `data/config/relay.json` 会被保留（entrypoint 不覆盖）：里面的 classic 字段
+   （`mode`/`dataPort`/`tokensFile`/`hostTokens`/`push`）在新版会被忽略并打 warn；建议对照
+   `group/relay.group.example.json` 手动精简一次，或备份后删除让 entrypoint 重新生成；
+3. `data/group.json`、`signing-key.pem`、`admin-token`、证书可沿用（主机注册/会话不丢）；
+4. 主机插件升级到 **0.2.0** 后需重启 DSH；旧 classic 配置字段会被丢弃，群体服务地址/邀请码保留，
+   必要时「重置注册」重新注册；App 升级到 **0.1.1** 后需重新扫码配对（旧 classic/单体连接会被丢弃）；
+5. 升级后首次验证：relay `/healthz` 200、主机注册成功、App 配对→进入正常、前后台不再收到任何推送。
+
 - **升级**：`docker load` 新镜像 → 改 `.env` 的 `DSH_RELAY_IMAGE` → `up -d --force-recreate`；
   改过镜像 tag/端口后必须重建容器。
 - **备份**：整个 `data/`（`group.json` 主机/邀请码、`signing-key.pem` 会话 token 签名私钥、
