@@ -10,7 +10,7 @@
 | relay | **0.3.0**（镜像 `dsh-remote-relay:0.3.0-group`） | 只保留群体版：控制面 WSS + 注册 API + 部署方后台 + 边缘 TLS/鉴权/隧道 |
 | host-plugin | **0.2.4** | 只保留群体版：注册/隧道/loopback 明文代理（HTTP+WS）/群体配对/设置 UI；推送已删除；**远程重启主机恢复为可选组件（默认关闭）** |
 | protocol | **0.2.0** | 只保留群体版协议常量/QR v2/帧/签名校验 |
-| App | **0.1.5（iOS build 11 / Android versionCode 11）** | 只有群体 token 模式；mTLS/推送/通知 UI 已删除；**App 锁=全局冷启动 + 单连接可选**，**远程重启主机 UI 已恢复**；✅ 2026-11-01 用户真机验收通过 |
+| App | **0.1.7（iOS build 14 / Android versionCode 14）** | 只有群体 token 模式；mTLS/推送/通知 UI 已删除；**App 锁=全局冷启动 + 单连接可选**，**远程重启主机 UI 已恢复**；0.1.7：主机内 ⚙→本主机「设备与安全」、App 设置去掉「设备与安全」、iOS 底部边缘手势 defer（可在设置页关闭）；✅ 2026-11-01 用户真机验收通过 |
 
 ## 验收状态
 
@@ -18,7 +18,25 @@
   relay **0.3.0**（配对/进入/手机布局/会话与实时消息正常；App 锁=全局冷启动+单连接可选；
   「重启主机 DSH」组件与保存后 App 即时刷新正常；前后台无任何推送）。
 - 首轮群体版（App 0.1.0 build 6 + host-plugin 0.1.23 + relay 0.2.13）同于 2026-11-01 验收通过。
+- **2026-11-01** App **0.1.7 (build 14)** 真机验收通过：主机内设置入口调整 + iOS 底部边缘手势 defer（含设置开关）。
 - 验收记录：[`dsh-remoteApp/docs/ACCEPTANCE.md`](dsh-remoteApp/docs/ACCEPTANCE.md)。
+
+## 2026-11-01 修复：主机内设置入口 + iOS 底部边缘手势（App 0.1.7）
+
+- **主机内设置入口**：进入主机后顶栏 ⚙ 改为打开**这台主机**的「设备与安全」（连接设置），
+  返回回到主机页面（WebView 常驻、不重载）；App「设置」只从主机列表（外面）右上角 ⚙ 进入，
+  并删掉底部「设备与安全」卡片——连接设置只从每个主机进入。
+- **iOS 底部边缘手势**：DSH 页面里可拖动的悬浮挂件贴到屏幕最底边后，从底边起手拖动会被
+  iOS「上滑回主屏」系统手势抢走（App 直接进后台）。进入主机页面时 defer 底部系统手势
+  （`preferredScreenEdgesDeferringSystemGestures`；公开 API + 运行时替换基类实现，进程内生效），
+  离开主机页面恢复默认。代价是主机页内回主屏要连划两次；该行为做成 App 设置开关
+  「主机页面手势 → 挂件贴底拖动」（默认开，关闭恢复一次上滑回主屏）。
+- **版本**：App **0.1.7（iOS build 14 / Android versionCode 14）**；纯 App 改动，host-plugin /
+  relay / protocol 不变。✅ **2026-11-01 用户真机验收通过**（主机内 ⚙、设置页入口、挂件贴底
+  拖动、开关关闭后一次上滑均按预期）。
+- **验证**：`npx tsc --noEmit`、`npm run check:native`、`npm run check:shell`（59 项）通过；
+  iOS Release **BUILD SUCCEEDED**，`devicectl` 覆盖安装并启动。
+- 验收记录：[`dsh-remoteApp/docs/ACCEPTANCE.md`](dsh-remoteApp/docs/ACCEPTANCE.md) 0.1.7 条目。
 
 ## 本轮（2026-11-01）剥离内容
 

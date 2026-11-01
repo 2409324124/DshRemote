@@ -28,23 +28,30 @@
 4. **token 会话**：challenge → 原生 P-256 签名 → 短时 token（15–30 分钟）→
    `__Host-dsh_session` cookie（host-only / Secure / SameSite=Strict）；进入主机、回前台、
    每 30s native 续期，token 只在内存与 WebView cookie store。
-5. **App 锁**：全局开关在「设置」页，只负责**冷启动解锁**；如需某台主机在打开时也要求
-   Face ID / Touch ID，在「设备与安全」里为该主机单独开启「打开此连接时要求面容」
-   （仅在全局 App 锁开启时生效；进入主机后的同步/心跳/切会话不会要求）。
+5. **App 锁**：全局开关在 App「设置」页（只从主机列表右上角 ⚙ 进入），只负责**冷启动解锁**；
+   如需某台主机在打开时也要求 Face ID / Touch ID，在该主机的「设备与安全」里单独开启
+   「打开此连接时要求面容」（入口：主机列表卡片上的 ⚙，或**进入主机后**顶栏的 ⚙；
+   仅在全局 App 锁开启时生效；进入主机后的同步/心跳/切会话不会要求）。
+6. **底部边缘手势（iOS）**：进入主机页面时 defer 底部（Home 指示条）的「上滑回主屏」系统
+   手势——页面里的可拖动悬浮挂件贴到屏幕最底边时，仍能从底边起手拖动而不会把 App 切到后台；
+   离开主机页面恢复系统默认。代价：在主机页面里从最底边上滑回主屏需连划两次（第一次只高亮）。
+   该行为默认开启，可在 App「设置 → 主机页面手势 → 挂件贴底拖动」关闭（关闭后恢复一次上滑
+   回主屏，但挂件贴最底边时从底边起手拖仍可能被系统手势抢走）。
 
 接口契约（群体版）见 `dsh-remoteService/docs/group-service-design.zh.md` 与 relay README §10；
 本分支只保留群体版；classic/单体版的设备管理/证书/推送/重启接口已从服务端删除。
 
 ---
 
-## 当前状态（0.1.5 / 构建号 11）
+## 当前状态（0.1.7 / 构建号 14）
 
 | 项 | 状态 |
 |---|---|
 | iOS Release 构建 / 真机安装 | ✅ 已完成（手动签名 + `devicectl`；无 dev-client/DevMenu） |
 | 群体版配对（v2 token + P-256 设备密钥 + SAS 确认） | ✅ 0.1.0 真机通过；0.1.1 剥离 classic 后**待用户复测** |
 | token 会话（challenge→签名→token→`__Host-` cookie、单飞/重试、404 设备失效提示） | ✅ 0.1.0 真机通过；0.1.1 **待复测** |
-| 主机列表 / 设备与安全 / 设置页（群体项） | ✅ 已实现；0.1.1 **待复测** |
+| 主机列表 / 连接设置（设备与安全）/ App 设置页 | ✅ 已实现；**0.1.6+ 起 App 设置页只保留版本 / App 锁 / 主机页面手势 / 缓存**，设备与安全只从「每个主机」进入（列表卡片 ⚙ 或进入主机后顶栏 ⚙） |
+| 底部边缘系统手势（iOS，0.1.7+） | ✅ 进入主机页面 defer「上滑回主屏」一次（挂件贴底可拖），离开恢复默认；App 设置里可关闭（默认开） |
 | 隧道 WebView（`react-native-webview` + 注入手机壳） | ✅ `npm run check:shell` 无头 Chrome 回归；真机 **待复测** |
 | ExternalPageScreen 内嵌浏览器 | ✅ 保留（群体版外链用） |
 | iOS/Android 原生模块 | ✅ 只保留群体版：`DSHMTLSGroupKeys.swift` / `DshMtlsGroupKeys.kt`（P-256 密钥/签名/cookie/缓存清理） |
@@ -76,10 +83,10 @@ dsh-remoteApp/
 │   │   └── mobileWebShell.ts      # 注入 DSH Web UI 的手机布局壳（字符串 JS）
 │   └── screens/
 │       ├── PairingScreen.tsx      # 相机扫码 + 手动粘贴 + 指纹 + 桌面确认等待（SAS）
-│       ├── HomeScreen.tsx         # 已配对主机列表（打开/设备与安全/删除/配对新主机）
-│       ├── WebViewScreen.tsx      # 主界面：token 会话 + 隧道 WebView + 外链
-│       ├── DevicesScreen.tsx      # 设备与安全：主机信息/设备密钥 label/解除配对
-│       ├── SettingsScreen.tsx     # 版本 / 清理缓存 / App 锁 / 设备与安全入口
+│       ├── HomeScreen.tsx         # 已配对主机列表（打开/连接设置/删除/配对新主机/App 设置）
+│       ├── WebViewScreen.tsx      # 主界面：token 会话 + 隧道 WebView + 外链；顶栏 ⚙ → 该主机连接设置
+│       ├── DevicesScreen.tsx      # 设备与安全（每台主机的连接设置）：主机信息/设备密钥 label/面容开关/解除配对
+│       ├── SettingsScreen.tsx     # App 系统设置（仅从主机列表进入）：版本 / App 锁 / 清理缓存
 │       ├── LockScreen.tsx         # App 锁
 │       └── ExternalPageScreen.tsx # 内嵌浏览器（外链）
 ├── scripts/
@@ -90,12 +97,13 @@ dsh-remoteApp/
     ├── src/index.ts               # JS 桥（requireOptionalNativeModule，缺失时优雅降级）
     ├── ios/
     │   ├── DSHMTLS.podspec
-    │   ├── DSHMTLSModule.swift    # Module 定义：group 函数 + setSessionCookie + clearWebCache
+    │   ├── DSHMTLSModule.swift    # Module 定义：group 函数 + setSessionCookie + clearWebCache + 底部手势 defer
+    │   ├── DSHMTLSBottomEdgeGestures.swift # iOS 底部边缘系统手势 defer（挂件贴底拖动）
     │   └── DSHMTLSGroupKeys.swift # Secure Enclave P-256 密钥生成/公钥导出/ECDSA 签名/删除
     └── android/
         ├── build.gradle
         └── src/main/java/com/dsh/remote/mtls/
-            ├── DshMtlsModule.kt       # Module 定义（group 函数 + cookie + 缓存清理）
+            ├── DshMtlsModule.kt       # Module 定义（group 函数 + cookie + 缓存清理 + 手势 defer no-op）
             └── DshMtlsGroupKeys.kt    # AndroidKeyStore P-256 密钥/签名
 ```
 
@@ -162,8 +170,8 @@ xcrun devicectl device process launch --device <IPHONE_UDID> <BUNDLE_ID>
 | `name` / `slug` | `DSH Remote` / `dsh-remote` | 显示名 / EAS slug |
 | `scheme` | `dshremote` | 与二维码 URI 一致 |
 | `ios.bundleIdentifier` / `android.package` | `<BUNDLE_ID>` | 已注册 App ID（两端对齐） |
-| `version` | `0.1.5`（iOS build 11 / Android versionCode 11） | 群体版 App 版本线 |
-| `ios.buildNumber` / `android.versionCode` | `7` / `7` | 每次构建递增，便于区分安装包 |
+| `version` | `0.1.7`（iOS build 14 / Android versionCode 14） | 群体版 App 版本线 |
+| `ios.buildNumber` / `android.versionCode` | `14` / `14` | 每次构建递增，便于区分安装包 |
 | `ios.infoPlist.ITSAppUsesNonExemptEncryption` | `false` | 仅标准 TLS，免出口合规文档 |
 | `plugins` | expo-camera / expo-secure-store / expo-local-authentication / expo-build-properties | 权限文案与 iOS 16.4 部署目标 |
 | （无） | — | 不再配置 expo-notifications；构建产物无 `aps-environment` entitlement |
@@ -277,7 +285,26 @@ npm run check:android-env # Android SDK 环境自检
 
 ---
 
-## 真机验收清单（0.1.5 build 11 — ✅ 2026-11-01 用户验收通过；历史清单见 git 历史）
+## 真机验收清单（0.1.7 build 14 — ✅ 2026-11-01 用户验收通过）
+
+> 本次三处改动：① **进入主机后**顶栏 ⚙ 改为打开该主机的连接设置，App「系统设置」页去掉
+> 底部「设备与安全」入口（纯 JS/TS）；② iOS 进入主机页面时 **defer 底部「上滑回主屏」**
+> 系统手势，让页面里的悬浮挂件贴到屏幕最底边也能拖动（原生模块，需重新构建安装）；
+> ③ 该手势行为在 App 设置里做成开关「主机页面手势 → 挂件贴底拖动」（**默认开启**），
+> 关掉即恢复「一次上滑回主屏」（挂件贴底拖动可能被系统手势抢走）。
+> 构建/安装成功 ≠ 验收通过，以下由用户实测后勾选。
+
+- [x] 覆盖安装 0.1.7 (build 14) 后 App 能启动；已有配对记录 / App 锁 / 单主机面容开关保持（无需重新扫码）。
+- [x] **进入主机后**点顶栏 ⚙ → 打开这台主机的「设备与安全」（不是 App 系统设置）；左上返回回到主机页面（页面不重新加载、会话与滚动位置保留）。
+- [x] 从**主机列表**（外面）右上角 ⚙ 进入 App「系统设置」：有版本 / App 锁 / 「主机页面手势 → 挂件贴底拖动」/ 清理缓存，底部**没有**「设备与安全」入口。
+- [x] 主机卡片上的 ⚙ 仍打开该主机的「设备与安全」，返回回到主机列表。
+- [x] **挂件拖动**：在主机页面把左下角/右下角悬浮挂件拖到屏幕最底边后，仍能按住它自由拖动，App 不会被切到后台；一次上滑只高亮 Home 指示条、再上滑一次才回主屏。
+- [x] 「挂件贴底拖动」开关**默认开启**；**关闭**后重新进入主机，从最底边上滑恢复**一次**回主屏（挂件贴底时从底边起手拖可能被系统手势抢走）；再打开后恢复两次上滑 + 挂件贴底可拖。
+- [x] 离开主机页面（回主机列表/设置页）后，底部上滑恢复为**一次**回主屏。
+- [x] 「设备与安全」页功能不回归：主机信息 / 设备密钥 label / 「打开此连接时要求面容」开关 / 解除本机配对（解除后回到列表或扫码页）。
+- [x] 其它功能不回归：重启主机 ⏻ 显示/重启/自动恢复、WS 断线自动重连、外链内嵌浏览器、清理缓存、App 锁冷启动。
+
+## 历史真机验收清单（0.1.5 build 11 — ✅ 2026-11-01 用户验收通过）
 
 - [x] 覆盖安装 0.1.5 (build 11) 后 App 能启动；旧连接记录按预期丢弃/迁移。
 - [x] 扫码/粘贴 **v2 token 二维码** 完成群体版配对（桌面确认 + SAS 一致）。

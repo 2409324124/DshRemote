@@ -6,6 +6,88 @@
 
 ---
 
+## 0.1.7（主机内设置入口调整 + iOS 底部边缘手势 defer）真机验收记录 — ✅ 2026-11-01 用户验收通过
+
+> 来源：用户反馈
+> ①「App 进入主机后右上角设置进入的是系统设置，正常应该是进入该链接（该主机）的设置；
+>    在外面进入的才是系统设置」；
+> ②「系统设置中最底部的『设备与安全』应该去掉，从每个主机里去看」；
+> ③「左下角的挂件拖动：此前可以随意拖动，现在从屏幕最底边起手拖会直接把 App 切到后台」。
+>
+> 0.1.7 一并包含两批改动（0.1.6 build 12 只是①的中间构建，未交付验收）：
+>
+> - 进入主机后，顶栏 ⚙ → 打开**这台主机**的「设备与安全」（连接设置）；返回回到主机页面
+>   （WebView 常驻，不重新加载）；App「系统设置」只从主机列表（外面）右上角 ⚙ 进入，
+>   底部「设备与安全」卡片删除；主机列表卡片上的 ⚙ 仍打开该主机的「设备与安全」。
+> - iOS：进入主机页面时 **defer 底部（Home 指示条）的「上滑回主屏」系统手势**。页面里的
+>   可拖动悬浮挂件贴到屏幕最底边后，从底边起手拖动不再被系统手势抢走；离开主机页面恢复
+>   系统默认。代价：主机页面里从最底边上滑回主屏需连划两次（第一次只高亮 Home 指示条）。
+> - 该手势行为做成了 App 设置里的开关（「主机页面手势 → 挂件贴底拖动」，**默认开启**）：
+>   想换回一次上滑回主屏的用户可以关掉（详见下方验收项）。
+>
+> **以下结果尚未由用户确认，不得勾选。**
+
+| 项目 | 值 |
+|---|---|
+| App 版本 | 0.1.7（buildNumber 14 / Android versionCode 14） |
+| 构建 | iOS Release（手动签名），`expo prebuild -p ios --no-install` + `pod install` + `xcodebuild` |
+| 构建结果 | `** BUILD SUCCEEDED **`（Xcode Release，手动签名；bundle 版本读到 0.1.7 / 14）；`devicectl` 安装并启动成功 |
+| 安装 | 已覆盖安装并启动到用户验收用 iPhone（UDID/序列号不入库；设备侧显示 0.1.7 / 14） |
+| 构建目录 | `/tmp/dsh-ios-group-gesture14`（本机临时目录，不入库） |
+| 原生模块 | 新增 `DSHMTLSBottomEdgeGestures.swift`（iOS 底部边缘手势 defer）+ JS bridge `setBottomEdgeGestureDeferral`（Android no-op） |
+| 静态检查 | `npx tsc --noEmit`、`npm run check:native`、`npm run check:shell` 均通过（59 项 shell 断言） |
+
+### 本版本改动
+
+1. **导航入口（纯 JS/TS）**：
+   - `App.tsx`：新增 `devicesReturnRoute`（'home' | 'webview'）——「设备与安全」按进入来源返回；
+     WebView 顶栏 ⚙ 改接 `handleOpenConnectionSettings`（→ devices，返回 webview）。
+   - `WebViewScreen.tsx`：`onOpenSettings` → `onOpenConnectionSettings`，注释/无障碍文案改「连接设置」；
+     新增底部手势 defer 的 effect（页面可见时开、离开时关）。
+   - `SettingsScreen.tsx`：删除底部「设备与安全」卡片与 `connection` / `onOpenDevices` props；
+     App 锁说明改为「在该主机卡片 ⚙（或进入主机后顶栏 ⚙）打开设备与安全，再开启面容开关」。
+2. **App 设置里的手势开关（纯 JS/TS）**：
+   - `src/lib/settings.ts`（新）：`bottomEdgeGestureDeferral` 偏好（SecureStore，默认开；
+     关闭时写 `'0'`）。
+   - `SettingsScreen.tsx`：新增「主机页面手势 → 挂件贴底拖动」开关（仅 iOS 展示），
+     说明开启/关闭各自的取舍。
+   - `WebViewScreen.tsx`：每次进入主机页面时读取该偏好再决定是否 defer；离开/锁屏恢复默认。
+3. **iOS 底部边缘手势 defer（原生）**：
+   - `DSHMTLSBottomEdgeGestures.swift`（新）：运行时替换 `UIViewController` 的
+     `preferredScreenEdgesDeferringSystemGestures` 基类实现（公开 API，进程内生效）：
+     开启返回 `.bottom`，关闭返回 `.none`（系统默认）；切换时通知系统刷新。
+   - `DSHMTLSModule.swift`：新增 `AsyncFunction("setBottomEdgeGestureDeferral")`。
+   - `DshMtlsModule.kt`：同名 no-op（Android 无等价接口），保持 JS↔原生导出一致。
+   - `modules/dsh-mtls/src/index.ts`：新增 `setBottomEdgeGestureDeferral(enabled)` bridge。
+   - `scripts/check-native-sources.mjs`：新增方法/文件/API 断言。
+4. 版本号 0.1.7 / buildNumber 14 / versionCode 14 同步（`package.json`、`app.json`、
+   `modules/dsh-mtls/{package.json,ios/DSHMTLS.podspec,android/build.gradle}`、`package-lock.json`）。
+
+### 验收项（2026-11-01 用户实测确认通过）
+
+- [x] 覆盖安装 0.1.7 (build 14) 后 App 正常启动；已有配对记录 / App 锁 / 单主机面容开关保持（无需重新扫码）。
+- [x] **进入主机后**点顶栏 ⚙ → 打开这台主机的「设备与安全」（不是 App 系统设置）；左上返回回到主机页面（页面不重新加载、会话与滚动位置保留）。
+- [x] 从**主机列表**（外面）右上角 ⚙ 进入 App「系统设置」：有版本 / App 锁 / 「主机页面手势 → 挂件贴底拖动」/ 清理缓存，底部**没有**「设备与安全」入口。
+- [x] 主机卡片上的 ⚙ 仍打开该主机的「设备与安全」，返回回到主机列表。
+- [x] **挂件拖动**：把悬浮挂件拖到屏幕最底边后，仍能按住它自由拖动，App 不会被切到后台；一次上滑只高亮 Home 指示条、再上滑一次才回主屏。
+- [x] 「挂件贴底拖动」开关**默认开启**；**关闭**后重新进入主机，从最底边上滑恢复**一次**回主屏（挂件贴底时从底边起手拖可能被系统手势抢走）；再打开后恢复两次上滑 + 挂件贴底可拖（开关在下次进入主机时生效）。
+- [x] 离开主机页面（回主机列表/设置页）后，底部上滑恢复为一次回主屏。
+- [x] 「设备与安全」页功能不回归：主机信息 / 设备密钥 label / 「打开此连接时要求面容」开关 / 解除本机配对（解除后回到列表或扫码页）。
+- [x] 其它功能不回归：重启主机 ⏻ 显示/重启/自动恢复、WS 断线自动重连、外链内嵌浏览器、清理缓存、App 锁冷启动。
+
+> 用户 **2026-11-01** 实测确认通过：主机内 ⚙ → 本主机「设备与安全」、系统设置入口/无设备与安全、挂件贴底拖动、开关关闭后一次上滑均按预期。
+
+### 回归命令（本机）
+
+```bash
+cd dsh-remoteApp && npx tsc --noEmit
+cd dsh-remoteApp && npm run check:native
+cd dsh-remoteApp && npm run check:shell
+# iOS Release 构建（buildNumber 14）见本文件「构建与安装（iOS）」
+```
+
+---
+
 ## 0.1.5（WS 批量断开去抖 + 自动重连修复）真机验收记录 — ✅ 2026-11-01 用户验收通过
 
 > 来源：用户实测（App 0.1.4 build 10 + host 0.2.3）反馈——主机保存「允许手机重启主机 DSH」
