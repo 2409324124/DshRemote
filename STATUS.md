@@ -1,11 +1,23 @@
 # DSH Remote Access — 项目状态 / 验收清单
 
-快照：2026-10-19（实施第 14 轮）· 方案：**B2（自托管盲中继 + 设备 mTLS + 自建域名）**
+快照：2026-11-02 · 方案：**B2（自托管盲中继 + 设备 mTLS + 自建域名）**
 
 ## 一句话
 
-POC 与 MVP 的**代码、文档、测试、部署产物、本地端到端验收均已完成**；
-剩余 3 项需要外部环境：**iOS 真机验收（需 Xcode/iPhone）、Android 编译（需 Android SDK）、生产 relay 上线（需 VPS+域名）**。
+已有 iOS 真机记录；2026-11-02 新增 **Windows 工具链搭建、Android debug 编译与 USB 安装、
+Android 真机配对 / 原生 mTLS WebView / 公网聊天烟雾测试**。各平台记录独立，不宣称全部场景验收完成。
+Android Release 签名/分发、FCM、Android 经公网远程重启等不在本轮验收范围。
+
+## 2026-11-02：Windows 安装与 Android 真机 E2E 烟雾测试
+
+- Windows 11 / JDK 17 / Android SDK 下完成 App 0.1.14（code 17）调试 APK 编译与小米 17（Android 16）USB 安装。
+- 真机扫码使用原生 AndroidKeyStore 身份配对；原生 mTLS WebView 已截图确认加载公网 DSH 页面，用户确认手机聊天烟雾测试通过，Desktop 可见同一会话及 `ok` 回复。
+- debug APK 未内嵌 JS，仍依赖 Metro + `adb reverse tcp:8081 tcp:8081`；不宣称全新 Windows 镜像、正式安装器或独立 Release 包验收。
+- 必需的源码改动为 Kotlin 透明背景 setter 编译修复；基线保留 Windows 证书工具兼容。生成的 Android 工程及本机 CMake 长路径设置不提交。
+- 回归：服务 161 passed / 2 skipped / 0 failed；App typecheck、原生桥一致性通过；既有手机壳检查未识别 Windows 浏览器路径，明确记为跳过。
+- 收口 Android 离线增量复编通过：`BUILD SUCCESSFUL in 54s`，339 项任务中 22 项执行、317 项已是最新，退出码 0；APK 的 SHA-256 与此前真机验收版本一致。
+- PC 配对弹窗自动续码、设备数与在线数混淆列为独立后续任务，不混入此 PR；已写的弹窗修复/测试已保存独立补丁。远程重启不计为本轮真机通过。
+- 复现命令、版本、脱敏审计和产物摘要见 [完整验收记录](docs/diagnostics/12-windows-android-e2e.md)。下方按日期保留历史记录，其旧状态不代表本轮结论。
 
 ## 2026-10-27 修复：应用内通知卡片停留时间 5s → 20s
 

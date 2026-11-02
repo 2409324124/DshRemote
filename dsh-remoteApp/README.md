@@ -2,7 +2,7 @@
 
 
 > 许可证：**AGPL-3.0-or-later**（完整文本见根目录 [`LICENSE`](../LICENSE)）。
-DSH 远程访问的手机端外壳：**Expo / React Native (TypeScript)**，iOS 优先、Android 同步搭骨架。
+DSH 远程访问的手机端外壳：**Expo / React Native (TypeScript)**，iOS 与 Android 均已有真机 mTLS 验收记录。
 
 > 相关文档：
 > [根目录总览](../README.md) ·
@@ -22,14 +22,14 @@ DSH 远程访问的手机端外壳：**Expo / React Native (TypeScript)**，iOS 
 
 ---
 
-## 当前状态（2026-10-26）
+## 当前状态（2026-11-02）
 
 | 项 | 状态 |
 |---|---|
 | iOS Release 构建 / 真机安装 | ✅ 已完成（手动签名 + `devicectl`；无 dev-client/DevMenu） |
 | iOS 原生 mTLS WebView（Secure Enclave 设备证书） | ✅ 真机通过 |
 | 配对 / 设备证书 / 撤销 / 审计 / App 锁 | ✅ 已实现 |
-| Android 源码（mTLS WebView / CSR / Keystore） | ✅ 源码完成；⏳ 未在有 Android SDK 的环境编译 |
+| Android 调试构建 / USB 安装 / 真机 mTLS | Windows 构建与 Xiaomi 17 / Android 16 配对、原生 WebView、公网聊天烟雾测试通过；debug 包需要 Metro，非 Release 验收。见 [Windows / Android 验收记录](../docs/diagnostics/12-windows-android-e2e.md) |
 | iOS 推送 | ✅ 自托管 APNs 直连（APNs device token + aps-environment；通知取会话标题+助手回复摘要；点击通知跳对应会话，2026-10-25 真机验证；App 锁屏时按系统通知显示）；Android FCM 未接入 |
 | 前台推送 | ✅ App 内通知卡片（默认不弹系统横幅，20s 自动消失；当前会话不弹卡片）；后台/锁屏仍是系统通知 |
 | 设置页 | ✅ 版本信息 / 应用内通知开关 / 通知权限 / 发送测试通知 / 清理 WebView 缓存 / 设备与安全入口 |
@@ -38,7 +38,7 @@ DSH 远程访问的手机端外壳：**Expo / React Native (TypeScript)**，iOS 
 | 配对默认设备名 | ✅ 使用系统本机设备名（`expo-device`；系统只给通用名时回退机型名），可自定义；不再写死「我的 iPhone」 |
 | 服务端 relay / 主机插件 | ✅ 见 `dsh-remoteService` 与 `server/` |
 
-> 原生构建需要 macOS + Xcode；本仓库不提交生成的 `ios/`/`android/` 目录和签名材料。
+> iOS 原生构建需要 macOS + Xcode；Android 可在 Windows + JDK 17 + Android SDK 构建。本仓库不提交生成的 `ios/`/`android/` 目录和签名材料。
 > 0.1.8 起新增 `expo-device`（读取系统设备名）——升级安装包需要重新 `pod install` / 构建原生包，不能只换 JS bundle。
 
 ## 目录结构
@@ -58,9 +58,9 @@ dsh-remoteApp/
 │   │   └── pairing.ts             # 可注入 PairingTransport 的配对流程骨架（CSR → /pair → 轮询 → 持久化）
 │   └── screens/
 │       ├── PairingScreen.tsx      # 相机扫码 + 手动粘贴 + 指纹/SAS/备用码 + 桌面确认等待
-│       ├── WebViewScreen.tsx      # 主界面：状态条 / 刷新 / 外链 / mTLS WebView 接入 TODO
+│       ├── WebViewScreen.tsx      # 主界面：状态条 / 刷新 / 外链 / 原生 mTLS WebView
 │       └── DevicesScreen.tsx      # 设备与安全：本地身份/证书状态、POC 证书导入、重新配对
-└── modules/dsh-mtls/              # 本地 Expo Module（POC，未编译）
+└── modules/dsh-mtls/              # 本地 Expo Module（iOS / Android 均已编译验收）
     ├── expo-module.config.json
     ├── package.json
     ├── src/index.ts               # JS 桥（requireOptionalNativeModule，缺失时优雅降级）
@@ -80,7 +80,10 @@ dsh-remoteApp/
 
 ---
 
-## 前置要求
+## 前置要求（iOS）
+
+Windows / Android 的工具链、编译、USB 安装与 Metro 步骤见
+[Windows 安装与 Android 真机端到端烟雾测试](../docs/diagnostics/12-windows-android-e2e.md)。
 
 - **macOS + 完整 Xcode**（App Store 安装，打开一次同意许可；`xcode-select -p` 应指向 `Xcode.app/Contents/Developer`，而不是 Command Line Tools）。
 - **CocoaPods**（`brew install cocoapods` 或 `sudo gem install cocoapods`）。
@@ -166,12 +169,11 @@ xcrun devicectl device capture screenshot --device <UDID> --destination /tmp/pho
 >   描述文件过期后 App 会启动失败，需要重新签名安装（设备 UDID 不在描述文件里同理）。
 > - 同一 bundle id 覆盖安装会保留 App 数据（SecureStore 里的配对信息不丢，无需重新配对）。
 
-Android（结构已就绪，未在本机验证）：
+Android（Windows 调试构建与真机烟雾测试已通过）：
 
-```bash
-npx expo prebuild --clean
-npx expo run:android --device
-```
+按 [详细复现与验收记录](../docs/diagnostics/12-windows-android-e2e.md) 中的 PowerShell 步骤执行，
+其中包括 SDK 安装名称、prebuild 后的 CMake 长路径处理、可选代理及 debug 包所需的 Metro / USB reverse。
+不要跳过生成工程设置直接照搬 iOS 的 `prebuild --clean`；也不要将 debug 构建通过等同于 Release 发布或远程重启验收。
 
 ---
 
