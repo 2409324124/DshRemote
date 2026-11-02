@@ -1,6 +1,7 @@
 # 12 - Windows setup and Android real-device E2E smoke test
 
-验收日期：2026-11-02（Asia/Shanghai）。源码基线：`ae60b31`，加本轮 Android Kotlin 编译修复。
+验收日期：2026-11-02（Asia/Shanghai）。实机验证所用源码基线：`ae60b31`，加本轮 Android Kotlin 编译修复。
+完整 PR 相对上游 `main`（`56ba36f`）的差异还包含该基线中的 Windows 兼容改动，代码状态保留 `64c1736`。
 
 ## 1. 验收范围与结论
 
@@ -236,7 +237,17 @@ Expo `--offline` 只限制开发服务器的外部请求，不会阻断 App 访�
 | `npm run check:shell` | 跳过：脚本未识别本机 Windows Chrome 路径 |
 | Android `assembleDebug --offline --no-daemon --console=plain` | 通过：`BUILD SUCCESSFUL in 54s`，339 项任务中 22 项执行、317 项已是最新，退出码 0 |
 
-Windows 证书工具兼容修复已在基线中，参见 [EC CSR / OpenSSL 排障](08-host-ec-csr-windows.md)。
+完整 PR 保留以下改动：
+
+| 部分 | 修改内容 |
+|---|---|
+| Android 原生模块 | 透明背景改用显式 setter，修复 Kotlin 编译错误 |
+| Windows 主机 | 补充桌面父进程识别；处理 OpenSSL 缺少配置文件的情况，保留 CSR 校验与签发规则 |
+| 回归测试 | 适配 Windows Shell、路径断言及 OpenSSL 配置 |
+| 服务端依赖锁文件 | 同步已声明的 workspace 包版本与许可证元数据，第三方依赖版本不变 |
+| 文档 | 记录安装、构建、真机验收及复现步骤，更新状态说明 |
+
+此前的 EC CSR 排障背景见 [EC CSR / OpenSSL 排障](08-host-ec-csr-windows.md)。
 
 ### 已知问题，独立后续任务
 

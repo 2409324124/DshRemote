@@ -311,11 +311,15 @@ base64 -i device.p12 | pbcopy        # macOS
 4. 成功后 `certRef` 会写回本地连接记录；返回主界面会切换到原生 mTLS WebView 并重新加载。
 5. 在「设备与安全 → 原生 mTLS 模块」确认 `identityPresent = 是`、证书主题/到期时间正确。
 
-**注意**：POC 手动证书只是测试链路；私钥在 Mac 上生成意味着它不再是"不可导出"，正式发布前必须切换到原生密钥生成。
+**注意**：POC 手动导入路径仅用于调试，私钥在 Mac 上生成，不具备设备内生成密钥的不可导出边界。
+正常扫码配对已使用原生密钥生成和 CSR 链路。
 
 ---
 
 ## 本次交付实际执行过的验证
+
+以下保留早期 POC 阶段的命令记录。当前平台状态见上方状态表，2026-11-02 的 Windows / Android
+构建、配对与公网聊天结果见 [完整验收记录](../docs/diagnostics/12-windows-android-e2e.md)。
 
 ```text
 $ npm install
@@ -337,7 +341,7 @@ $ node <protocol.ts 编译后的 Node 自测>
 #         备用码校验 / API URL 拼接 / buildPairingUri 往返
 ```
 
-**未执行**（本机环境限制，不能声称完成）：
+**早期 POC 阶段未执行的项目**：
 
 - `npx expo prebuild` / `pod install` / `npx expo run:ios` —— 需要完整 Xcode；
 - Android Gradle 构建 —— 需要 Android SDK；
@@ -363,8 +367,10 @@ $ node <protocol.ts 编译后的 Node 自测>
 
 ## 已知差距 / TODO
 
+原生 `generateCsr`、Secure Enclave / AndroidKeyStore 密钥生成与证书安装均已实现；Android 正常配对与
+原生 mTLS WebView 链路已于 2026-11-02 通过真机验证。以下保留其余待办和调试路径的验证项。
+
 **安全/身份**
-- 原生 CSR 与 Secure Enclave / AndroidKeyStore 密钥生成（`generateCsr` 目前抛未实现异常）。
 - 证书自动续期（默认 30 天，可配 7–90 天）与到期提醒。
 - 可选：pin TLS 叶证书 SPKI（注意 `hostfp` 是**主机身份公钥**指纹，不是 TLS 证书指纹，二者不能混用）。
 - App 锁：已接入生物识别（`expo-local-authentication`），交互/超时行为待真机验收。
@@ -376,7 +382,7 @@ $ node <protocol.ts 编译后的 Node 自测>
 - 会话列表/审批等原生页面（App 审核 4.2 的长期对策）；多主机列表/删除/主机名同步已实现（0.1.8）。
 - iOS 下拉刷新：`react-native-webview` 无 iOS 下拉刷新，当前用顶部刷新按钮；原生 WebView 落地时可补。
 - 文件上传/下载（WebView 原生选择器、分享面板）未专门处理。
-- Android 的 KeyChain alias 选择/安装后回填、`importP12` 密码校验、AndroidKeyStore 正式路径需真机联调。
+- Android 的 KeyChain alias 选择/安装后回填、`importP12` 密码校验等手动导入路径仍需分别验证。
 
 **工程**
 - 未写 Jest/RNTL 组件测试；协议层已有 Node 自测（可提成正式测试）。
