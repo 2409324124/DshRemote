@@ -29,7 +29,7 @@ DSH 远程访问的手机端外壳：**Expo / React Native (TypeScript)**，iOS 
 | iOS Release 构建 / 真机安装 | ✅ 已完成（手动签名 + `devicectl`；无 dev-client/DevMenu） |
 | iOS 原生 mTLS WebView（Secure Enclave 设备证书） | ✅ 真机通过 |
 | 配对 / 设备证书 / 撤销 / 审计 / App 锁 | ✅ 已实现 |
-| Android 调试构建 / USB 安装 / 真机 mTLS | Windows 构建与 Xiaomi 17 / Android 16 配对、原生 WebView、公网聊天烟雾测试通过；debug 包需要 Metro，非 Release 验收。见 [Windows / Android 验收记录](../docs/diagnostics/12-windows-android-e2e.md) |
+| Android 调试构建 / USB 安装 / 真机 mTLS | Windows 构建与 Xiaomi 17 / Android 16 配对、原生 WebView、公网聊天烟雾测试通过；debug 包需要 Metro。见 [Windows / Android 验收记录](../docs/diagnostics/12-windows-android-e2e.md) |
 | iOS 推送 | ✅ 自托管 APNs 直连（APNs device token + aps-environment；通知取会话标题+助手回复摘要；点击通知跳对应会话，2026-10-25 真机验证；App 锁屏时按系统通知显示）；Android FCM 未接入 |
 | 前台推送 | ✅ App 内通知卡片（默认不弹系统横幅，20s 自动消失；当前会话不弹卡片）；后台/锁屏仍是系统通知 |
 | 设置页 | ✅ 版本信息 / 应用内通知开关 / 通知权限 / 发送测试通知 / 清理 WebView 缓存 / 设备与安全入口 |
@@ -173,7 +173,7 @@ Android（Windows 调试构建与真机烟雾测试已通过）：
 
 按 [详细复现与验收记录](../docs/diagnostics/12-windows-android-e2e.md) 中的 PowerShell 步骤执行，
 其中包括 SDK 安装名称、prebuild 后的 CMake 长路径处理、可选代理及 debug 包所需的 Metro / USB reverse。
-不要跳过生成工程设置直接照搬 iOS 的 `prebuild --clean`；也不要将 debug 构建通过等同于 Release 发布或远程重启验收。
+使用 `prebuild --clean` 重新生成 Android 工程后，需补回 CMake 长路径设置。
 
 ---
 
