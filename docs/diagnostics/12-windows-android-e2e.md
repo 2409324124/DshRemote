@@ -29,6 +29,46 @@ Windows Desktop 使用已放置的官方桌面包，启动并加载本地远程�
 先按 [部署指南](../../dsh-remoteService/docs/DEPLOY.md) 配置 relay、DNS、主机 TLS 证书及 host token。
 本文统一用 `relay.example.com` / `h_example` 占位，不包含本机真实域名、密钥、配对 URI 或 token。
 
+### 2.1 先对齐版本：Expo SDK 不等于 Android SDK
+
+本轮没有升级仓库的 Expo / React Native 来适配电脑，而是补齐电脑缺少的 Android 构建组件。
+最初本机已有 Android Platform 35 / Build Tools 35.0.0，但这不足以构建当前依赖生成的工程。
+
+| 层级 | 仓库或依赖实际要求 | 本机最初情况 / 最终处理 |
+|---|---|---|
+| Expo SDK | `package.json` 声明 `~58.0.14`，实际安装 58.0.14 | 保持仓库版本；58 不是 Android API 编号 |
+| React Native | 声明及实际安装均为 0.88.0 | 保持仓库版本，不降级换工具链 |
+| Android compileSdk | 37 | 最初只有 Platform 35；最终补装 `platforms;android-37.0` |
+| Android targetSdk / minSdk | 36 / 24 | 与 compileSdk 37 是不同字段，不是版本冲突 |
+| Build Tools | 37.0.0 | 最初只有 35.0.0；最终补装 37.0.0 |
+| NDK / CMake / Gradle | 27.1.12297006 / 3.22.1 / wrapper 9.4.1 | 按生成工程补齐，不能用“已安装 Android SDK”代替逐项核对 |
+
+Android 版本来源可在安装依赖后核对：
+`node_modules/react-native/gradle/libs.versions.toml` 中本轮为 `compileSdk=37`、`targetSdk=36`、
+`minSdk=24`、`buildTools=37.0.0`、`ndkVersion=27.1.12297006`；Expo autolinking 的 Gradle 插件
+读取版本目录并设置根工程属性，生成的 `android/app/build.gradle` 再消费这些属性。
+因此不能只看 `app.json` 中显式设置的 `minSdkVersion=24`，就认为安装任意 SDK 版本都够用。
+
+`npm run check:android-env` 目前是 Bash 粗检：主要检查 JDK/SDK 目录/adb 是否存在，
+**不校验 compileSdk、Build Tools、NDK、CMake 是否满足当前工程**，也不是 Windows PowerShell 完整预检。
+它显示“环境就绪”不等于已通过构建。本 PR 只记录该限制，不扩改环境检查脚本。
+
+### 2.2 首次构建实际卡过的位置
+
+| 卡点 / 表现 | 本轮确认的原因 | 处理方式 |
+|---|---|---|
+| 配好 `ANDROID_HOME` 后仍需安装 SDK | 本机 35 与生成工程所需 37 / Build Tools 37.0.0 不一致 | 按版本表补齐，不修改依赖版本来绕过 |
+| 请求 `platforms;android-37` 找不到包 | 本轮 SDK Manager 的包名实际是 `platforms;android-37.0` | 使用下面列出的完整 package ID；API 数字和安装包名不要混写 |
+| Gradle 很久没有任务进展、CPU 很低 | 继承了不可用代理；去掉代理后，直连 `plugins.gradle.org` 的依赖请求仍失败 | 先确认下载连通性，再显式配置 Gradle JVM HTTP/HTTPS 代理；不是 Kotlin / RN 版本不兼容 |
+| Gradle wrapper 下载停在 0 字节 | `gradle-9.4.1-bin.zip` 的下载没有取得有效进展 | 使用可用网络/代理；手动下载时先校验完整性，再放到该 wrapper 的缓存目录，不换成其它 Gradle 版本 |
+| 自动安装 NDK 看起来卡住 | NDK 下载体积大，受下载链路影响；不是已经开始编译 C++ | 预先安装并确认 27.1.12297006 完整；本轮用官方归档校验后解压补齐，不把 `.partial` 目录当作已安装 |
+| 下载结束后仍被 Kotlin / Ninja 阻塞 | 透明背景属性赋值编译错误、Windows 对象文件路径过长 | 按第 3 节修复 setter，并在生成工程中设置 `CMAKE_OBJECT_PATH_MAX=240` |
+
+SDK Manager 代理参数与 Gradle JVM 的代理参数不是同一套；仅设置 PowerShell 的代理环境变量
+不代表两者都能下载。首次构建必须有依赖缓存或可用网络；第 3 节的 `--offline` 只适合依赖齐全后的复编。
+
+### 2.3 安装与配置步骤
+
 1. 安装 Windows 版 Node 24、JDK 17、Android SDK Command-line Tools / Platform Tools。
    本轮分别放在 `D:\dev\jdk-17` 和 `D:\Android\Sdk`，仓库使用短路径 `D:\dev\DshRemote`。
 2. 安装、启动 DSH Windows Desktop。若使用本地插件，先完全退出 Desktop，在服务目录安装依赖，
